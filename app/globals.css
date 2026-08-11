@@ -48,6 +48,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .button.primary { color: white; border-color: #32363c; background: #3b3f45; padding-inline: 17px; }
 .button.dark { color: white; border-color: var(--ink); background: var(--ink); }
 .button.ghost { background: rgba(255,255,255,0.7); }
+.button.compact-toggle { border-color: #9a9da3; background: #f1f2f3; }
+.button.compact-toggle.active { color: white; border-color: #24282d; background: #24282d; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
 .button.warning { color: #3d2c00; border-color: #e5b63c; background: #ffd561; }
 .button.danger { color: #8e2823; border-color: #e8bbb8; background: #fff7f6; }
 .full-button { width: 100%; margin-top: 8px; }
@@ -73,6 +75,7 @@ button.stat-card { cursor: pointer; }.stat-card.active { outline: 2px solid var(
 .search-box { display: flex; align-items: center; width: min(300px, 27vw); padding: 0 10px; }
 .search-box span { margin-right: 7px; color: var(--muted); font-size: 20px; transform: rotate(-15deg); }.search-box input { width: 100%; border: 0; outline: 0; background: transparent; font-size: 12px; }
 .result-count { color: var(--muted); font-size: 11px; }.toolbar-spacer { flex: 1; }
+.compact-fit-note { padding: 4px 7px; border-radius: 4px; color: #176245; background: #e0f1ea; font-size: 10px; font-weight: 700; white-space: nowrap; }
 
 .board-panel { min-height: 420px; border: 1px solid var(--line-strong); background: white; box-shadow: 0 3px 14px rgba(20,25,30,.05); }
 .board-scroll { max-height: calc(100vh - 294px); overflow: auto; }
@@ -91,6 +94,31 @@ thead .sticky-col { z-index: 8; background: var(--header) !important; }
 .col-progress > strong { display: block; text-align: right; font-size: 12px; }.row-progress { margin-top: 5px; }.row-progress i { background: #22262b; }
 
 .app-footer { display: flex; justify-content: flex-end; gap: 20px; padding: 8px 3px 0; color: var(--muted); font-size: 10px; }
+.compact-mode { min-height: 100vh; padding: 7px 10px 4px; overflow: hidden; }
+.compact-mode .topbar { margin-bottom: 6px; }
+.compact-mode .brand-mark { width: 34px; height: 34px; border-radius: 6px; font-size: 14px; }
+.compact-mode .brand-block { gap: 8px; }
+.compact-mode .brand-block h1 { font-size: 17px; }
+.compact-mode .brand-block p { display: none; }
+.compact-mode .button { min-height: 30px; padding-inline: 10px; font-size: 11px; }
+.compact-mode .summary-strip, .compact-mode .backup-banner { display: none; }
+.compact-mode .toolbar { gap: 5px; margin-bottom: 5px; }
+.compact-mode .toolbar select, .compact-mode .search-box { height: 30px; }
+.compact-mode .board-panel { height: var(--compact-board-height); min-height: 0; }
+.compact-mode .board-scroll { height: 100%; max-height: none; }
+.compact-mode .board-table { font-size: 9px; }
+.compact-mode .board-table thead th { height: var(--compact-header-height); font-size: 8px; }
+.compact-mode .board-table tbody td { height: var(--compact-row-height); }
+.compact-mode .col-project, .compact-mode .col-subitem, .compact-mode .col-dri, .compact-mode .col-progress { padding-top: 1px !important; padding-bottom: 1px !important; }
+.compact-mode .project-link, .compact-mode .col-subitem strong { overflow: hidden; line-height: 1.05; text-overflow: ellipsis; white-space: nowrap; }
+.compact-mode .project-link small, .compact-mode .col-subitem small, .compact-mode .row-progress { display: none; }
+.compact-mode .milestone-heading span { padding-top: 2px; font-size: 7px; }
+.compact-mode .milestone-heading b { margin-top: 1px; margin-bottom: 2px; max-height: 34px; -webkit-line-clamp: 3; font-size: 8px; line-height: 1.05; }
+.compact-mode .milestone-cell { height: calc(var(--compact-row-height) - 1px); font-size: 13px; }
+.compact-mode .milestone-cell.has-note i { top: 2px; right: 2px; width: 4px; height: 4px; }
+.compact-mode .milestone-cell.has-accent::before { width: 3px; }
+.compact-mode .col-progress > strong { text-align: center; font-size: 9px; }
+.compact-mode .app-footer { height: 20px; padding-top: 4px; overflow: hidden; white-space: nowrap; }
 .empty-state { display: grid; place-items: center; align-content: center; min-height: 450px; padding: 50px; text-align: center; }.empty-state h2 { margin: 18px 0 5px; }.empty-state p { margin: 0 0 20px; color: var(--muted); }.empty-state > div:last-child { display: flex; gap: 8px; }
 
 .drawer-backdrop { position: fixed; z-index: 30; inset: 0; visibility: hidden; padding: 0; border: 0; background: rgba(16,18,22,.34); opacity: 0; transition: 180ms; }.drawer-backdrop.open { visibility: visible; opacity: 1; }

@@ -47,4 +47,7 @@ test("keeps real template data out of the public application bundle", async () =
   assert.match(boardSource, /exportProjectCsv/);
   assert.match(boardSource, /exportMilestoneCsv/);
   assert.match(boardSource, /existing\.length \+ files\.length > 8/);
+  assert.match(boardSource, /project-board-compact-mode/);
+  assert.match(boardSource, /fitBoardToViewport/);
+  assert.match(boardSource, /已自动适配/);
 });

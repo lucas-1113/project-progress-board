@@ -122,7 +122,10 @@ export function ProjectBoard() {
   const [busy, setBusy] = useState(false);
   const [storageText, setStorageText] = useState("正在读取…");
   const [previewImageId, setPreviewImageId] = useState<string | null>(null);
+  const [compactMode, setCompactMode] = useState(() => typeof window !== "undefined" && localStorage.getItem("project-board-compact-mode") === "1");
+  const [compactMetrics, setCompactMetrics] = useState({ rowHeight: 30, headerHeight: 50, boardHeight: 700 });
   const importInputRef = useRef<HTMLInputElement>(null);
+  const boardPanelRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     loadAppData()
@@ -162,6 +165,31 @@ export function ProjectBoard() {
     });
   }, [projects, search, categoryFilter, statusFilter]);
 
+  const visibleRowCount = filteredProjects.reduce((sum, project) => sum + project.subItems.length, 0);
+
+  useEffect(() => {
+    if (!compactMode || !boardPanelRef.current) return;
+    let frame = 0;
+    const fitBoardToViewport = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const boardTop = boardPanelRef.current?.getBoundingClientRect().top ?? 130;
+        const boardHeight = Math.max(280, Math.floor(window.innerHeight - boardTop - 25));
+        const headerHeight = 48;
+        const groupSeparators = Math.max(0, filteredProjects.length - 1) * 2;
+        const rowHeight = Math.max(16, Math.min(36, Math.floor((boardHeight - headerHeight - groupSeparators - 4) / Math.max(visibleRowCount, 1))));
+        setCompactMetrics({ rowHeight, headerHeight, boardHeight });
+        boardPanelRef.current?.querySelector(".board-scroll")?.scrollTo({ top: 0 });
+      });
+    };
+    fitBoardToViewport();
+    window.addEventListener("resize", fitBoardToViewport);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", fitBoardToViewport);
+    };
+  }, [compactMode, filteredProjects.length, visibleRowCount]);
+
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? null;
   const selectedImages = images.filter((image) => image.projectId === selectedProjectId).sort((a, b) => a.order - b.order);
   const previewImage = images.find((image) => image.id === previewImageId) ?? null;
@@ -179,6 +207,14 @@ export function ProjectBoard() {
     } catch {
       setStorageText("暂时无法读取");
     }
+  }
+
+  function toggleCompactMode() {
+    setCompactMode((current) => {
+      const next = !current;
+      localStorage.setItem("project-board-compact-mode", next ? "1" : "0");
+      return next;
+    });
   }
 
   async function persistProject(project: Project) {
@@ -487,7 +523,7 @@ export function ProjectBoard() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${compactMode ? "compact-mode" : ""}`}>
       <header className="topbar">
         <div className="brand-block">
           <div className="brand-mark">15</div>
@@ -497,6 +533,12 @@ export function ProjectBoard() {
           <span className={`save-indicator ${saveState}`} aria-live="polite">
             <span className="save-dot" />{saveState === "saving" ? "保存中" : saveState === "error" ? "保存失败" : "已保存到本机"}
           </span>
+          <button
+            className={`button compact-toggle ${compactMode ? "active" : ""}`}
+            aria-pressed={compactMode}
+            title="自动压缩顶部区域和项目行，让当前项目尽量在一屏内显示"
+            onClick={toggleCompactMode}
+          >{compactMode ? "退出紧凑" : "紧凑模式"}</button>
           <button className="button ghost" onClick={openSettings}>阶段设置</button>
           <button className="button primary" onClick={() => setDetailsOpen(true)}>全局项目详情</button>
         </div>
@@ -536,6 +578,7 @@ export function ProjectBoard() {
           <option value="all">全部状态</option><option value="ongoing">进行中</option><option value="risk">风险</option><option value="closed">已结案</option>
         </select>
         <span className="result-count">显示 {filteredProjects.length} / {projects.length} 个主项目</span>
+        {compactMode && <span className="compact-fit-note">已自动适配 {visibleRowCount} 行</span>}
         <div className="toolbar-spacer" />
         <button className="button ghost" onClick={() => exportProjectCsv(projects, images)}>项目 CSV</button>
         <button className="button ghost" onClick={() => exportMilestoneCsv(projects, settings)}>里程碑 CSV</button>
@@ -549,7 +592,15 @@ export function ProjectBoard() {
         }} />
       </section>
 
-      <section className="board-panel">
+      <section
+        className="board-panel"
+        ref={boardPanelRef}
+        style={compactMode ? ({
+          "--compact-row-height": `${compactMetrics.rowHeight}px`,
+          "--compact-header-height": `${compactMetrics.headerHeight}px`,
+          "--compact-board-height": `${compactMetrics.boardHeight}px`,
+        } as CSSProperties) : undefined}
+      >
         {projects.length === 0 ? (
           <div className="empty-state">
             <div className="empty-icon">15</div><h2>从一份项目开始</h2>
