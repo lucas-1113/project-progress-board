@@ -1,91 +1,50 @@
 import assert from "node:assert/strict";
-import { access, readFile, readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
-const developmentPreviewMeta =
-  /<meta(?=[^>]*\bname=["']codex-preview["'])(?=[^>]*\bcontent=["']development["'])[^>]*>/i;
-const templateRoot = new URL("../", import.meta.url);
-const previewRoot = new URL("../app/_sites-preview/", import.meta.url);
+const root = new URL("../", import.meta.url);
 
-async function render() {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
-
-  return worker.fetch(
-    new Request("http://localhost/", {
-      headers: { accept: "text/html" },
-    }),
-    {
-      ASSETS: {
-        fetch: async () => new Response("Not found", { status: 404 }),
-      },
-    },
-    {
-      waitUntil() {},
-      passThroughOnException() {},
-    },
-  );
-}
-
-test("server-renders the starter loading skeleton", async () => {
-  const response = await render();
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
-
-  const html = await response.text();
-  assert.match(html, developmentPreviewMeta);
-  assert.match(html, /<title>Your site is taking shape<\/title>/i);
-  assert.match(html, /Building your site/);
-  assert.match(html, /Your site is taking shape/);
-  assert.match(
-    html,
-    /Your first version will appear here automatically when it’s ready\./,
-  );
-  assert.doesNotMatch(html, /Codex/);
-  assert.match(html, /react-loading-skeleton/);
-  assert.match(html, /role="status"/);
-});
-
-test("keeps the loading skeleton scoped and disposable", async () => {
-  const [preview, css, page, layout, packageJson, files] = await Promise.all([
-    readFile(new URL("SkeletonPreview.tsx", previewRoot), "utf8"),
-    readFile(new URL("preview.css", previewRoot), "utf8"),
-    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../package.json", import.meta.url), "utf8"),
-    readdir(previewRoot),
+test("builds a portable GitHub Pages PWA shell", async () => {
+  const [html, manifest, worker, files] = await Promise.all([
+    readFile(new URL("dist-pages/index.html", root), "utf8"),
+    readFile(new URL("public/manifest.webmanifest", root), "utf8"),
+    readFile(new URL("public/sw.js", root), "utf8"),
+    readdir(new URL("dist-pages/", root)),
   ]);
 
-  assert.deepEqual(files.sort(), ["SkeletonPreview.tsx", "preview.css"]);
-  assert.match(preview, /from "react-loading-skeleton"/);
-  assert.match(preview, /baseColor="#eceae7"/);
-  assert.match(preview, /highlightColor="#f9f8f6"/);
-  assert.match(preview, /duration=\{2\.8\}/);
-  assert.match(preview, /sites-skeleton-search-placeholder/);
-  assert.match(packageJson, /"react-loading-skeleton": "3\.5\.0"/);
+  assert.match(html, /<html lang="zh-CN">/i);
+  assert.match(html, /<title>项目进度看板<\/title>/i);
+  assert.match(html, /href="\.\/manifest\.webmanifest"/i);
+  assert.match(html, /src="\.\/assets\//i);
+  assert.ok(files.includes("icon-192.png"));
+  assert.ok(files.includes("icon-512.png"));
+  assert.ok(files.includes("sw.js"));
 
-  const shellIndex = preview.indexOf('className="sites-skeleton-shell"');
-  const statusIndex = preview.indexOf('className="sites-skeleton-status"');
-  assert.ok(shellIndex >= 0 && statusIndex > shellIndex);
-  assert.match(css, /position:\s*fixed/);
-  assert.match(css, /inset:\s*0/);
-  assert.match(css, /opacity:\s*0\.52/);
-  assert.match(css, /prefers-reduced-motion:\s*reduce/);
-  assert.doesNotMatch(css, /#020617|canvas|pets|progress/i);
-  assert.doesNotMatch(
-    preview,
-    /loading-spinner|status-mark|status-progress|canvas|cookie|random/i,
-  );
+  const parsedManifest = JSON.parse(manifest);
+  assert.equal(parsedManifest.display, "standalone");
+  assert.equal(parsedManifest.start_url, "./");
+  assert.equal(parsedManifest.scope, "./");
+  assert.match(worker, /project-board-/);
+});
 
-  assert.match(page, /export const metadata:\s*Metadata/);
-  assert.match(page, /"codex-preview": "development"/);
-  assert.match(page, /<SkeletonPreview \/>/);
-  assert.match(layout, /title:\s*"Starter Project"/);
-  assert.doesNotMatch(layout, /codex-preview|_sites-preview|themeColor|\bViewport\b/);
-  assert.doesNotMatch(css, /(^|\s)(html|body)\s*\{/m);
+test("keeps real template data out of the public application bundle", async () => {
+  const [html, assets, boardSource] = await Promise.all([
+    readFile(new URL("dist-pages/index.html", root), "utf8"),
+    readdir(new URL("dist-pages/assets/", root)),
+    readFile(new URL("app/ProjectBoard.tsx", root), "utf8"),
+  ]);
+  const assetText = (
+    await Promise.all(
+      assets.map((file) => readFile(new URL(`dist-pages/assets/${file}`, root), "utf8")),
+    )
+  ).join("\n");
+  const publicOutput = `${html}\n${assetText}`;
 
-  await assert.rejects(
-    access(new URL("public/_sites-preview", templateRoot)),
-  );
+  assert.doesNotMatch(publicOutput, /RL-134C|研发部项目进度追踪表模版|\/Users\/lumen/);
+  assert.match(boardSource, /openImport/);
+  assert.match(boardSource, /openExport/);
+  assert.match(boardSource, /runBackupOperation/);
+  assert.match(boardSource, /exportProjectCsv/);
+  assert.match(boardSource, /exportMilestoneCsv/);
+  assert.match(boardSource, /existing\.length \+ files\.length > 8/);
 });
