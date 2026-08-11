@@ -87,13 +87,13 @@ button.stat-card { cursor: pointer; }.stat-card.active { outline: 2px solid var(
 
 .board-panel { min-height: 420px; border: 1px solid var(--line-strong); background: white; box-shadow: 0 3px 14px rgba(20,25,30,.05); }
 .board-scroll { max-height: calc(100vh - 294px); overflow: auto; }
-.board-table { width: 100%; min-width: 1238px; table-layout: fixed; border-collapse: separate; border-spacing: 0; font-size: 11px; }
+.board-table { width: 100%; min-width: 1302px; table-layout: fixed; border-collapse: separate; border-spacing: 0; font-size: 11px; }
 .board-table th, .board-table td { border-right: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); padding: 0; background: white; }
 .board-table thead th { position: sticky; z-index: 6; top: 0; height: 84px; color: #25282c; background: var(--header); border-bottom-color: #767a80; font-size: 10px; }
 .board-table tbody td { height: 51px; }
 .sticky-col { position: sticky; z-index: 3; background: #fff !important; }
 thead .sticky-col { z-index: 8; background: var(--header) !important; }
-.col-no { left: 0; width: 45px; text-align: center; }.col-project { left: 45px; width: 182px; padding: 7px 9px !important; }.col-subitem { left: 227px; width: 166px; padding: 6px 8px !important; box-shadow: 4px 0 7px rgba(0,0,0,.05); }.col-dri { width: 80px; padding: 6px !important; text-align: center; }.col-progress { width: 84px; padding: 6px 8px !important; }
+.col-no { left: 0; width: 45px; text-align: center; }.col-project { left: 45px; width: 182px; padding: 7px 9px !important; }.col-subitem { left: 227px; width: 166px; padding: 6px 8px !important; box-shadow: 4px 0 7px rgba(0,0,0,.05); }.col-dri { width: 80px; padding: 6px !important; text-align: center; }.col-output-month { width: 64px; padding: 5px !important; text-align: center; }.col-progress { width: 84px; padding: 6px 8px !important; }
 .group-start td { border-top: 2px solid #6c7076; }.group-start:first-child td { border-top: 0; }.group-continuation .col-no, .group-continuation .col-project { background: #f9f9fa !important; }
 .project-link { padding: 0; border: 0; color: #194da9; background: none; cursor: pointer; font-weight: 750; text-align: left; line-height: 1.22; }.project-link:hover { text-decoration: underline; }.project-link small { display: block; margin-top: 4px; color: #6c7077; font-size: 9px; font-weight: 500; text-decoration: none; }
 .archive-row-action { display: block; margin-top: 5px; padding: 2px 5px; border: 1px solid #78b69e; border-radius: 4px; color: #105f43; background: #e6f4ee; cursor: pointer; font-size: 8px; font-weight: 750; }
@@ -122,7 +122,7 @@ thead .sticky-col { z-index: 8; background: var(--header) !important; }
 .compact-mode .board-table { font-size: 9px; }
 .compact-mode .board-table thead th { height: var(--compact-header-height); font-size: 8px; }
 .compact-mode .board-table tbody td { height: var(--compact-row-height); }
-.compact-mode .col-project, .compact-mode .col-subitem, .compact-mode .col-dri, .compact-mode .col-progress { padding-top: 1px !important; padding-bottom: 1px !important; }
+.compact-mode .col-project, .compact-mode .col-subitem, .compact-mode .col-dri, .compact-mode .col-output-month, .compact-mode .col-progress { padding-top: 1px !important; padding-bottom: 1px !important; }
 .compact-mode .project-link, .compact-mode .col-subitem strong { overflow: hidden; line-height: 1.05; text-overflow: ellipsis; white-space: nowrap; }
 .compact-mode .project-link small, .compact-mode .col-subitem small, .compact-mode .row-progress { display: none; }
 .compact-mode .archive-row-action { display: none; }

@@ -680,6 +680,7 @@ export function ProjectBoard() {
                 <th className="sticky-col col-project">主项目</th>
                 <th className="sticky-col col-subitem">子项 / 型号</th>
                 <th className="col-dri">业务 DRI</th>
+                <th className="col-output-month">出样月份</th>
                 {milestoneDefinitions.map((definition, index) => (
                   <th className="milestone-heading" key={definition.id} title={definition.name}><span>{String(index + 1).padStart(2, "0")}</span><b>{definition.name}</b></th>
                 ))}
@@ -695,8 +696,9 @@ export function ProjectBoard() {
                         {boardView === "active" && canMoveToCompleted(project) && <button className="archive-row-action" onClick={() => moveProjectToCompleted(project)}>移入已完成</button>}
                       </>}
                     </td>
-                    <td className="sticky-col col-subitem"><strong>{subItem.name}</strong><small>{subItem.category || project.category} · {subItem.outputMonth || project.outputTime || "未定"}</small></td>
+                    <td className="sticky-col col-subitem"><strong>{subItem.name}</strong><small>{subItem.category || project.category || "未分类"}</small></td>
                     <td className="col-dri">{subItem.businessDri || "—"}</td>
+                    <td className="col-output-month">{subItem.outputMonth || project.outputTime || "未定"}</td>
                     {milestoneDefinitions.map((definition) => {
                       const milestone = subItem.milestones.find((entry) => entry.milestoneId === definition.id) ?? {
                         milestoneId: definition.id, state: "not_started", note: "", color: "", updatedAt: null,
