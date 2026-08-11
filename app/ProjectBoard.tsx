@@ -1,0 +1,694 @@
+"use client";
+
+import { ChangeEvent, CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AppSettings,
+  ImageRecord,
+  MilestoneDefinition,
+  MilestoneEntry,
+  MilestoneState,
+  Project,
+  ProjectStatus,
+  STATE_LABELS,
+  STATUS_LABELS,
+  SubItem,
+  createEmptySettings,
+  emptyMilestones,
+} from "./types";
+import {
+  deleteImageRecord,
+  deleteProjectRecord,
+  loadAppData,
+  replaceAllData,
+  saveImageRecord,
+  saveProject,
+  saveSettings,
+} from "./lib/db";
+import { createPortablePayload, decryptPackage, downloadTextFile, encryptPayload } from "./lib/crypto";
+import { exportMilestoneCsv, exportProjectCsv } from "./lib/csv";
+
+type SaveState = "loading" | "saved" | "saving" | "error";
+type MilestoneEditorState = { projectId: string; subItemId: string; milestoneId: string } | null;
+type BackupMode = "export" | "import" | null;
+
+const ACCENT_COLORS = ["", "#FFCC00", "#F59E0B", "#EF4444", "#8B5CF6", "#0EA5E9", "#14B8A6"];
+const STATE_SYMBOLS: Record<MilestoneState, string> = {
+  not_started: "",
+  in_progress: "●",
+  done: "✓",
+  blocked: "!",
+};
+
+function progressPercent(subItem: SubItem): number {
+  return Math.round((subItem.milestones.filter((item) => item.state === "done").length / 15) * 100);
+}
+
+function formatTime(value: string | null): string {
+  if (!value) return "尚未备份";
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+function makeId(prefix: string): string {
+  return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function newSubItem(settings: AppSettings, name = "新子项"): SubItem {
+  const now = new Date().toISOString();
+  return {
+    id: makeId("sub"),
+    name,
+    category: "",
+    businessDri: "",
+    outputMonth: "",
+    milestones: emptyMilestones(settings.milestoneDefinitions),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function ImageThumb({ image, alt }: { image: ImageRecord; alt: string }) {
+  const url = useMemo(() => URL.createObjectURL(image.blob), [image.blob]);
+  useEffect(() => () => URL.revokeObjectURL(url), [url]);
+  // Blob URLs are already compressed locally and cannot use the framework image optimizer.
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={url} alt={alt} />;
+}
+
+async function compressImage(file: File): Promise<Blob> {
+  const sourceUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("图片无法读取"));
+      element.src = sourceUrl;
+    });
+    const maxEdge = 1600;
+    const scale = Math.min(1, maxEdge / Math.max(image.naturalWidth, image.naturalHeight));
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("浏览器无法处理图片");
+    context.drawImage(image, 0, 0, width, height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", 0.82));
+    if (!blob) throw new Error("图片压缩失败");
+    return blob;
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
+}
+
+export function ProjectBoard() {
+  const [settings, setSettings] = useState<AppSettings>(createEmptySettings());
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [images, setImages] = useState<ImageRecord[]>([]);
+  const [saveState, setSaveState] = useState<SaveState>("loading");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | ProjectStatus>("all");
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [milestoneEditor, setMilestoneEditor] = useState<MilestoneEditorState>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsDraft, setSettingsDraft] = useState<MilestoneDefinition[]>([]);
+  const [backupMode, setBackupMode] = useState<BackupMode>(null);
+  const [backupPassword, setBackupPassword] = useState("");
+  const [backupPasswordConfirm, setBackupPasswordConfirm] = useState("");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [storageText, setStorageText] = useState("正在读取…");
+  const [previewImageId, setPreviewImageId] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    loadAppData()
+      .then((data) => {
+        setSettings(data.settings);
+        setProjects(data.projects);
+        setImages(data.images);
+        setSaveState("saved");
+      })
+      .catch((error) => {
+        setErrorMessage(error instanceof Error ? error.message : "本机数据读取失败");
+        setSaveState("error");
+      });
+    refreshStorageEstimate();
+  }, []);
+
+  const milestoneDefinitions = useMemo(
+    () => [...settings.milestoneDefinitions].sort((a, b) => a.order - b.order),
+    [settings.milestoneDefinitions],
+  );
+
+  const categories = useMemo(
+    () => Array.from(new Set(projects.map((project) => project.category).filter(Boolean))).sort(),
+    [projects],
+  );
+
+  const filteredProjects = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return projects.filter((project) => {
+      const matchesSearch = !query || [project.projectNo, project.name, project.pm, project.dri, ...project.subItems.map((item) => item.name)]
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+      const matchesCategory = categoryFilter === "all" || project.category === categoryFilter;
+      const matchesStatus = statusFilter === "all" || project.status === statusFilter;
+      return matchesSearch && matchesCategory && matchesStatus;
+    });
+  }, [projects, search, categoryFilter, statusFilter]);
+
+  const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? null;
+  const selectedImages = images.filter((image) => image.projectId === selectedProjectId).sort((a, b) => a.order - b.order);
+  const previewImage = images.find((image) => image.id === previewImageId) ?? null;
+  const totalSubItems = projects.reduce((sum, project) => sum + project.subItems.length, 0);
+  const overallProgress = totalSubItems
+    ? Math.round(projects.flatMap((project) => project.subItems).reduce((sum, item) => sum + progressPercent(item), 0) / totalSubItems)
+    : 0;
+
+  async function refreshStorageEstimate() {
+    try {
+      const estimate = await navigator.storage?.estimate?.();
+      if (!estimate?.quota) return setStorageText("由浏览器管理");
+      const used = estimate.usage ?? 0;
+      setStorageText(`${(used / 1024 / 1024).toFixed(1)} MB / ${(estimate.quota / 1024 / 1024).toFixed(0)} MB`);
+    } catch {
+      setStorageText("暂时无法读取");
+    }
+  }
+
+  async function persistProject(project: Project) {
+    setSaveState("saving");
+    try {
+      await saveProject(project);
+      setSaveState("saved");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "项目保存失败");
+      setSaveState("error");
+    }
+  }
+
+  function updateProjectLocal(projectId: string, updater: (project: Project) => Project): Project | null {
+    let nextProject: Project | null = null;
+    setProjects((current) => current.map((project) => {
+      if (project.id !== projectId) return project;
+      nextProject = updater(project);
+      return nextProject;
+    }));
+    setSaveState("saving");
+    return nextProject;
+  }
+
+  function updateProjectField<K extends keyof Project>(projectId: string, field: K, value: Project[K]) {
+    updateProjectLocal(projectId, (project) => ({ ...project, [field]: value, updatedAt: new Date().toISOString() }));
+  }
+
+  function saveEditedProject(projectId: string) {
+    const project = projects.find((item) => item.id === projectId);
+    if (project) persistProject(project);
+  }
+
+  async function commitProject(project: Project) {
+    setProjects((current) => current.map((item) => (item.id === project.id ? project : item)));
+    await persistProject(project);
+  }
+
+  async function addProject() {
+    const now = new Date().toISOString();
+    const nextNo = Math.max(0, ...projects.map((project) => project.no)) + 1;
+    const project: Project = {
+      id: makeId("project"),
+      no: nextNo,
+      pm: "",
+      projectNo: `NEW-${String(nextNo).padStart(3, "0")}`,
+      name: "新项目",
+      category: "",
+      demandQty: "",
+      outputTime: "",
+      outputQty: "",
+      detailProgress: "",
+      dri: "",
+      cp: "",
+      status: "ongoing",
+      createdAt: now,
+      updatedAt: now,
+      subItems: [newSubItem(settings)],
+    };
+    setProjects((current) => [...current, project]);
+    await persistProject(project);
+    setSelectedProjectId(project.id);
+  }
+
+  async function removeProject(project: Project) {
+    if (!confirm(`确定删除“${project.name || project.projectNo}”吗？项目、子项、里程碑和图片都将从本机删除。`)) return;
+    setSaveState("saving");
+    try {
+      await deleteProjectRecord(project.id);
+      setProjects((current) => current.filter((item) => item.id !== project.id));
+      setImages((current) => current.filter((image) => image.projectId !== project.id));
+      setSelectedProjectId(null);
+      setSaveState("saved");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "项目删除失败");
+      setSaveState("error");
+    }
+  }
+
+  async function addSubItem(project: Project) {
+    const updated = {
+      ...project,
+      subItems: [...project.subItems, newSubItem(settings)],
+      updatedAt: new Date().toISOString(),
+    };
+    await commitProject(updated);
+  }
+
+  async function removeSubItem(project: Project, subItem: SubItem) {
+    if (project.subItems.length === 1) return alert("每个主项目至少保留一个子项");
+    if (!confirm(`确定删除子项“${subItem.name}”及其 15 个里程碑记录吗？`)) return;
+    await commitProject({
+      ...project,
+      subItems: project.subItems.filter((item) => item.id !== subItem.id),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  function updateSubItemField(projectId: string, subItemId: string, field: keyof SubItem, value: string) {
+    updateProjectLocal(projectId, (project) => ({
+      ...project,
+      subItems: project.subItems.map((item) => item.id === subItemId
+        ? { ...item, [field]: value, updatedAt: new Date().toISOString() }
+        : item),
+      updatedAt: new Date().toISOString(),
+    }));
+  }
+
+  async function saveMilestone(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!milestoneEditor) return;
+    const form = new FormData(event.currentTarget);
+    const state = String(form.get("state")) as MilestoneState;
+    const note = String(form.get("note") ?? "").trim();
+    const color = String(form.get("color") ?? "");
+    const project = projects.find((item) => item.id === milestoneEditor.projectId);
+    if (!project) return;
+    const now = new Date().toISOString();
+    const updated: Project = {
+      ...project,
+      subItems: project.subItems.map((subItem) => subItem.id === milestoneEditor.subItemId
+        ? {
+          ...subItem,
+          milestones: subItem.milestones.map((milestone) => milestone.milestoneId === milestoneEditor.milestoneId
+            ? { ...milestone, state, note, color, updatedAt: now }
+            : milestone),
+          updatedAt: now,
+        }
+        : subItem),
+      updatedAt: now,
+    };
+    await commitProject(updated);
+    setMilestoneEditor(null);
+  }
+
+  async function uploadImages(event: ChangeEvent<HTMLInputElement>, project: Project) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (!files.length) return;
+    const existing = images.filter((image) => image.projectId === project.id);
+    if (existing.length + files.length > 8) return alert(`每个项目最多 8 张图片；当前已有 ${existing.length} 张。`);
+    setBusy(true);
+    setSaveState("saving");
+    try {
+      const compressed: ImageRecord[] = [];
+      for (const [index, file] of files.entries()) {
+        if (!file.type.startsWith("image/")) throw new Error(`${file.name} 不是图片文件`);
+        const blob = await compressImage(file);
+        const estimate = await navigator.storage?.estimate?.();
+        if (estimate?.quota && (estimate.usage ?? 0) + blob.size > estimate.quota * 0.8) {
+          throw new Error("本机存储使用量将超过 80%，请先删除图片或导出备份");
+        }
+        compressed.push({
+          id: makeId("image"),
+          projectId: project.id,
+          name: file.name.replace(/\.[^.]+$/, ".webp"),
+          type: "image/webp",
+          blob,
+          order: existing.length + index,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      for (const image of compressed) await saveImageRecord(image);
+      setImages((current) => [...current, ...compressed]);
+      setSaveState("saved");
+      refreshStorageEstimate();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "图片上传失败");
+      setSaveState("error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeImage(image: ImageRecord) {
+    if (!confirm(`删除图片“${image.name}”吗？`)) return;
+    await deleteImageRecord(image.id);
+    setImages((current) => current.filter((item) => item.id !== image.id));
+    refreshStorageEstimate();
+  }
+
+  async function moveImage(image: ImageRecord, direction: -1 | 1) {
+    const projectImages = images.filter((item) => item.projectId === image.projectId).sort((a, b) => a.order - b.order);
+    const index = projectImages.findIndex((item) => item.id === image.id);
+    const swap = projectImages[index + direction];
+    if (!swap) return;
+    const moved = { ...image, order: swap.order };
+    const swapped = { ...swap, order: image.order };
+    await Promise.all([saveImageRecord(moved), saveImageRecord(swapped)]);
+    setImages((current) => current.map((item) => item.id === moved.id ? moved : item.id === swapped.id ? swapped : item));
+  }
+
+  function openSettings() {
+    setSettingsDraft(milestoneDefinitions.map((item) => ({ ...item })));
+    setSettingsOpen(true);
+  }
+
+  async function commitSettings() {
+    if (settingsDraft.some((item) => !item.name.trim())) return alert("阶段名称不能为空");
+    const updated: AppSettings = {
+      ...settings,
+      milestoneDefinitions: settingsDraft.map((item, index) => ({ ...item, name: item.name.trim(), order: index })),
+      updatedAt: new Date().toISOString(),
+    };
+    setSaveState("saving");
+    try {
+      await saveSettings(updated);
+      setSettings(updated);
+      setSettingsOpen(false);
+      setSaveState("saved");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "设置保存失败");
+      setSaveState("error");
+    }
+  }
+
+  function moveDefinition(index: number, direction: -1 | 1) {
+    const next = [...settingsDraft];
+    const target = index + direction;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    setSettingsDraft(next);
+  }
+
+  function openExport() {
+    setBackupMode("export");
+    setBackupPassword("");
+    setBackupPasswordConfirm("");
+  }
+
+  function openImport(file: File) {
+    setImportFile(file);
+    setBackupMode("import");
+    setBackupPassword("");
+    setBackupPasswordConfirm("");
+  }
+
+  async function runBackupOperation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!backupMode) return;
+    if (backupPassword.length < 8) return alert("密码至少需要 8 个字符");
+    if (backupMode === "export" && backupPassword !== backupPasswordConfirm) return alert("两次输入的密码不一致");
+    setBusy(true);
+    try {
+      if (backupMode === "export") {
+        const timestamp = new Date().toISOString();
+        const updatedSettings = { ...settings, lastBackupAt: timestamp, updatedAt: timestamp };
+        const payload = await createPortablePayload(updatedSettings, projects, images);
+        const encrypted = await encryptPayload(payload, backupPassword);
+        downloadTextFile(encrypted, `项目看板备份-${timestamp.slice(0, 10)}.pboard`);
+        await saveSettings(updatedSettings);
+        setSettings(updatedSettings);
+      } else {
+        if (!importFile) throw new Error("请选择需要导入的 .pboard 文件");
+        const payload = await decryptPackage(await importFile.text(), backupPassword);
+        const confirmed = confirm(
+          `备份包含 ${payload.projects.length} 个主项目和 ${payload.images.length} 张图片。导入后将替换当前本机数据，是否继续？`,
+        );
+        if (!confirmed) return;
+        const data = await replaceAllData(payload);
+        setSettings(data.settings);
+        setProjects(data.projects);
+        setImages(data.images);
+        setSelectedProjectId(null);
+      }
+      setBackupMode(null);
+      setImportFile(null);
+      setSaveState("saved");
+      refreshStorageEstimate();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "备份操作失败");
+      setSaveState("error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clearLocalData() {
+    const message = settings.lastBackupAt
+      ? `最近备份：${formatTime(settings.lastBackupAt)}。确定清空本机全部项目和图片吗？`
+      : "你尚未做过加密备份。清空后无法恢复，仍要继续吗？";
+    if (!confirm(message) || !confirm("请再次确认：删除本机全部项目数据。")) return;
+    const emptySettings = createEmptySettings();
+    const data = await replaceAllData({
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      settings: emptySettings,
+      projects: [],
+      images: [],
+    });
+    setSettings(data.settings);
+    setProjects([]);
+    setImages([]);
+    setSettingsOpen(false);
+    setSelectedProjectId(null);
+    refreshStorageEstimate();
+  }
+
+  const editorProject = milestoneEditor ? projects.find((project) => project.id === milestoneEditor.projectId) : null;
+  const editorSubItem = editorProject?.subItems.find((item) => item.id === milestoneEditor?.subItemId);
+  const editorMilestone = editorSubItem?.milestones.find((item) => item.milestoneId === milestoneEditor?.milestoneId);
+  const editorDefinition = milestoneDefinitions.find((item) => item.id === milestoneEditor?.milestoneId);
+
+  if (saveState === "loading") {
+    return <main className="loading-screen"><div className="loading-mark">15</div><p>正在打开本机项目看板…</p></main>;
+  }
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="brand-block">
+          <div className="brand-mark">15</div>
+          <div><h1>项目进度看板</h1><p>一页看清 · 本机保存 · 可加密交付</p></div>
+        </div>
+        <div className="topbar-actions">
+          <span className={`save-indicator ${saveState}`} aria-live="polite">
+            <span className="save-dot" />{saveState === "saving" ? "保存中" : saveState === "error" ? "保存失败" : "已保存到本机"}
+          </span>
+          <button className="button ghost" onClick={openSettings}>阶段设置</button>
+          <button className="button primary" onClick={() => setDetailsOpen(true)}>全局项目详情</button>
+        </div>
+      </header>
+
+      {errorMessage && (
+        <div className="error-banner" role="alert"><span>{errorMessage}</span><button onClick={() => setErrorMessage("")}>关闭</button></div>
+      )}
+
+      {!settings.lastBackupAt && projects.length > 0 && (
+        <div className="backup-banner">
+          <div><strong>建议先做一次加密备份</strong><span>浏览器数据被清理后，只能通过 .pboard 文件恢复。</span></div>
+          <button className="button warning" onClick={openExport}>立即备份</button>
+        </div>
+      )}
+
+      <section className="summary-strip" aria-label="项目统计">
+        <div className="stat-card total"><span>主项目</span><strong>{projects.length}</strong><small>{totalSubItems} 个子项</small></div>
+        <button className={`stat-card ongoing ${statusFilter === "ongoing" ? "active" : ""}`} onClick={() => setStatusFilter(statusFilter === "ongoing" ? "all" : "ongoing")}>
+          <span>进行中</span><strong>{projects.filter((project) => project.status === "ongoing").length}</strong><small>点击筛选</small>
+        </button>
+        <button className={`stat-card risk ${statusFilter === "risk" ? "active" : ""}`} onClick={() => setStatusFilter(statusFilter === "risk" ? "all" : "risk")}>
+          <span>风险</span><strong>{projects.filter((project) => project.status === "risk").length}</strong><small>点击筛选</small>
+        </button>
+        <button className={`stat-card closed ${statusFilter === "closed" ? "active" : ""}`} onClick={() => setStatusFilter(statusFilter === "closed" ? "all" : "closed")}>
+          <span>已结案</span><strong>{projects.filter((project) => project.status === "closed").length}</strong><small>点击筛选</small>
+        </button>
+        <div className="stat-card progress"><span>平均完成度</span><strong>{overallProgress}%</strong><div className="mini-progress"><i style={{ width: `${overallProgress}%` }} /></div></div>
+      </section>
+
+      <section className="toolbar">
+        <label className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索项目、型号、负责人…" /></label>
+        <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} aria-label="按类别筛选">
+          <option value="all">全部类别</option>{categories.map((category) => <option key={category}>{category}</option>)}
+        </select>
+        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "all" | ProjectStatus)} aria-label="按状态筛选">
+          <option value="all">全部状态</option><option value="ongoing">进行中</option><option value="risk">风险</option><option value="closed">已结案</option>
+        </select>
+        <span className="result-count">显示 {filteredProjects.length} / {projects.length} 个主项目</span>
+        <div className="toolbar-spacer" />
+        <button className="button ghost" onClick={() => exportProjectCsv(projects, images)}>项目 CSV</button>
+        <button className="button ghost" onClick={() => exportMilestoneCsv(projects, settings)}>里程碑 CSV</button>
+        <button className="button ghost" onClick={() => importInputRef.current?.click()}>导入备份</button>
+        <button className="button ghost" onClick={openExport}>加密备份</button>
+        <button className="button dark" onClick={addProject}>＋ 新建项目</button>
+        <input ref={importInputRef} type="file" accept=".pboard,application/json" hidden onChange={(event) => {
+          const file = event.target.files?.[0] ?? null;
+          event.currentTarget.value = "";
+          if (file) openImport(file);
+        }} />
+      </section>
+
+      <section className="board-panel">
+        {projects.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-icon">15</div><h2>从一份项目开始</h2>
+            <p>新建空白项目，或导入私下收到的加密 .pboard 数据包。</p>
+            <div><button className="button dark" onClick={addProject}>新建项目</button><button className="button ghost" onClick={() => importInputRef.current?.click()}>导入加密包</button></div>
+          </div>
+        ) : (
+          <div className="board-scroll">
+            <table className="board-table">
+              <thead><tr>
+                <th className="sticky-col col-no">序号</th>
+                <th className="sticky-col col-project">主项目</th>
+                <th className="sticky-col col-subitem">子项 / 型号</th>
+                <th className="col-dri">业务 DRI</th>
+                {milestoneDefinitions.map((definition, index) => (
+                  <th className="milestone-heading" key={definition.id} title={definition.name}><span>{String(index + 1).padStart(2, "0")}</span><b>{definition.name}</b></th>
+                ))}
+                <th className="col-progress">完成度</th>
+              </tr></thead>
+              <tbody>
+                {filteredProjects.map((project) => project.subItems.map((subItem, subIndex) => (
+                  <tr key={subItem.id} className={subIndex === 0 ? "group-start" : "group-continuation"}>
+                    <td className="sticky-col col-no">{subIndex === 0 ? project.no : ""}</td>
+                    <td className="sticky-col col-project">
+                      {subIndex === 0 && <button className="project-link" onClick={() => setSelectedProjectId(project.id)}>{project.projectNo || project.name}<small>{project.name}</small></button>}
+                    </td>
+                    <td className="sticky-col col-subitem"><strong>{subItem.name}</strong><small>{subItem.category || project.category} · {subItem.outputMonth || project.outputTime || "未定"}</small></td>
+                    <td className="col-dri">{subItem.businessDri || "—"}</td>
+                    {milestoneDefinitions.map((definition) => {
+                      const milestone = subItem.milestones.find((entry) => entry.milestoneId === definition.id) ?? {
+                        milestoneId: definition.id, state: "not_started", note: "", color: "", updatedAt: null,
+                      } as MilestoneEntry;
+                      const style = milestone.color ? ({ "--cell-accent": milestone.color } as CSSProperties) : undefined;
+                      return <td className="milestone-td" key={definition.id}>
+                        <button
+                          className={`milestone-cell state-${milestone.state} ${milestone.note ? "has-note" : ""} ${milestone.color ? "has-accent" : ""}`}
+                          style={style}
+                          title={`${definition.name}：${STATE_LABELS[milestone.state]}${milestone.note ? `\n${milestone.note}` : ""}`}
+                          aria-label={`编辑 ${subItem.name} 的 ${definition.name}`}
+                          onClick={() => setMilestoneEditor({ projectId: project.id, subItemId: subItem.id, milestoneId: definition.id })}
+                        >{STATE_SYMBOLS[milestone.state]}{milestone.note && <i />}</button>
+                      </td>;
+                    })}
+                    <td className="col-progress"><strong>{progressPercent(subItem)}%</strong><div className="row-progress"><i style={{ width: `${progressPercent(subItem)}%` }} /></div></td>
+                  </tr>
+                )))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <footer className="app-footer"><span>数据仅保存在此浏览器</span><span>本机存储：{storageText}</span><span>最近备份：{formatTime(settings.lastBackupAt)}</span></footer>
+
+      <button className={`drawer-backdrop ${selectedProject ? "open" : ""}`} onClick={() => setSelectedProjectId(null)} aria-label="关闭项目详情" />
+      <aside className={`detail-drawer ${selectedProject ? "open" : ""}`} aria-hidden={!selectedProject}>
+        {selectedProject && <>
+          <div className="drawer-header">
+            <div><span className={`status-chip ${selectedProject.status}`}>{STATUS_LABELS[selectedProject.status]}</span><h2>{selectedProject.projectNo || `项目 ${selectedProject.no}`}</h2><p>{selectedProject.name}</p></div>
+            <button className="icon-button" onClick={() => setSelectedProjectId(null)} aria-label="关闭详情">×</button>
+          </div>
+          <div className="drawer-body">
+            <section className="form-section"><div className="section-title"><h3>项目基本信息</h3><span>失去焦点后自动保存</span></div>
+              <div className="form-grid">
+                <label><span>项目编号</span><input value={selectedProject.projectNo} onChange={(event) => updateProjectField(selectedProject.id, "projectNo", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+                <label><span>项目名称</span><input value={selectedProject.name} onChange={(event) => updateProjectField(selectedProject.id, "name", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+                <label><span>PM</span><input value={selectedProject.pm} onChange={(event) => updateProjectField(selectedProject.id, "pm", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+                <label><span>类别</span><input value={selectedProject.category} onChange={(event) => updateProjectField(selectedProject.id, "category", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+                <label><span>需求数量</span><input value={selectedProject.demandQty} onChange={(event) => updateProjectField(selectedProject.id, "demandQty", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+                <label><span>计划出样</span><input value={selectedProject.outputTime} onChange={(event) => updateProjectField(selectedProject.id, "outputTime", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+                <label><span>出样数量</span><input value={selectedProject.outputQty} onChange={(event) => updateProjectField(selectedProject.id, "outputQty", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+                <label><span>检查日期</span><input value={selectedProject.cp} onChange={(event) => updateProjectField(selectedProject.id, "cp", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+                <label className="full"><span>整体状态</span><select value={selectedProject.status} onChange={async (event) => {
+                  const updated = { ...selectedProject, status: event.target.value as ProjectStatus, updatedAt: new Date().toISOString() };
+                  await commitProject(updated);
+                }}><option value="ongoing">进行中</option><option value="risk">风险</option><option value="closed">已结案</option></select></label>
+                <label className="full"><span>负责人</span><textarea rows={3} value={selectedProject.dri} onChange={(event) => updateProjectField(selectedProject.id, "dri", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+                <label className="full"><span>详细进展</span><textarea rows={8} value={selectedProject.detailProgress} onChange={(event) => updateProjectField(selectedProject.id, "detailProgress", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+              </div>
+            </section>
+
+            <section className="form-section"><div className="section-title"><h3>子项 / 型号</h3><button className="text-button" onClick={() => addSubItem(selectedProject)}>＋ 添加子项</button></div>
+              <div className="subitem-list">{selectedProject.subItems.map((subItem) => <div className="subitem-card" key={subItem.id}>
+                <div className="subitem-card-head"><strong>{subItem.name || "未命名子项"}</strong><span>{progressPercent(subItem)}%</span></div>
+                <div className="form-grid compact">
+                  <label><span>子项名称</span><input value={subItem.name} onChange={(event) => updateSubItemField(selectedProject.id, subItem.id, "name", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+                  <label><span>类别</span><input value={subItem.category} onChange={(event) => updateSubItemField(selectedProject.id, subItem.id, "category", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+                  <label><span>业务 DRI</span><input value={subItem.businessDri} onChange={(event) => updateSubItemField(selectedProject.id, subItem.id, "businessDri", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+                  <label><span>出样月份</span><input value={subItem.outputMonth} onChange={(event) => updateSubItemField(selectedProject.id, subItem.id, "outputMonth", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+                </div>
+                <button className="danger-link" onClick={() => removeSubItem(selectedProject, subItem)}>删除此子项</button>
+              </div>)}</div>
+            </section>
+
+            <section className="form-section"><div className="section-title"><h3>项目图片 <small>{selectedImages.length}/8</small></h3><label className={`text-button upload-label ${busy ? "disabled" : ""}`}>＋ 上传图片<input type="file" accept="image/*" multiple hidden disabled={busy} onChange={(event) => uploadImages(event, selectedProject)} /></label></div>
+              {selectedImages.length ? <div className="image-grid">{selectedImages.map((image, index) => <div className="image-card" key={image.id}>
+                <button className="image-preview-button" onClick={() => setPreviewImageId(image.id)}><ImageThumb image={image} alt={image.name} /></button>
+                <div><span title={image.name}>{image.name}</span><div><button disabled={index === 0} onClick={() => moveImage(image, -1)}>←</button><button disabled={index === selectedImages.length - 1} onClick={() => moveImage(image, 1)}>→</button><button onClick={() => removeImage(image)}>删除</button></div></div>
+              </div>)}</div> : <p className="muted-block">暂无图片。上传后会自动压缩并只保存在本机。</p>}
+            </section>
+          </div>
+          <div className="drawer-footer"><button className="button danger" onClick={() => removeProject(selectedProject)}>删除项目</button><button className="button dark" onClick={() => setSelectedProjectId(null)}>完成</button></div>
+        </>}
+      </aside>
+
+      {detailsOpen && <div className="modal-layer"><section className="fullscreen-modal">
+        <div className="modal-header"><div><span className="eyebrow">DETAIL VIEW</span><h2>全局项目详情</h2><p>{projects.length} 个主项目 · 点击项目编号进入编辑</p></div><button className="icon-button" onClick={() => setDetailsOpen(false)}>×</button></div>
+        <div className="detail-table-wrap"><table className="detail-table"><thead><tr><th>No.</th><th>PM</th><th>项目编号 / 名称</th><th>类别</th><th>需求数量</th><th>计划出样</th><th>出样数量</th><th>详细进展</th><th>负责人</th><th>检查日期</th><th>状态</th><th>图片</th></tr></thead>
+          <tbody>{filteredProjects.map((project) => <tr key={project.id}><td>{project.no}</td><td>{project.pm}</td><td><button className="project-link" onClick={() => { setSelectedProjectId(project.id); setDetailsOpen(false); }}>{project.projectNo}<small>{project.name}</small></button></td><td>{project.category}</td><td>{project.demandQty}</td><td>{project.outputTime}</td><td>{project.outputQty}</td><td className="progress-copy">{project.detailProgress || "—"}</td><td className="dri-copy">{project.dri || "—"}</td><td>{project.cp}</td><td><span className={`status-chip ${project.status}`}>{STATUS_LABELS[project.status]}</span></td><td>{images.filter((image) => image.projectId === project.id).length}</td></tr>)}</tbody>
+        </table></div>
+        <div className="modal-footer"><button className="button ghost" onClick={() => exportProjectCsv(projects, images)}>导出项目 CSV</button><button className="button dark" onClick={() => setDetailsOpen(false)}>返回看板</button></div>
+      </section></div>}
+
+      {milestoneEditor && editorMilestone && <div className="modal-layer compact-layer"><form className="compact-modal" onSubmit={saveMilestone}>
+        <div className="modal-header"><div><span className="eyebrow">MILESTONE</span><h2>{editorDefinition?.name}</h2><p>{editorProject?.projectNo} · {editorSubItem?.name}</p></div><button type="button" className="icon-button" onClick={() => setMilestoneEditor(null)}>×</button></div>
+        <div className="modal-content">
+          <fieldset className="state-options"><legend>进度状态</legend>{(Object.keys(STATE_LABELS) as MilestoneState[]).map((state) => <label key={state} className={`state-option ${state}`}><input type="radio" name="state" value={state} defaultChecked={editorMilestone.state === state} /><span>{STATE_SYMBOLS[state] || "○"}</span><b>{STATE_LABELS[state]}</b></label>)}</fieldset>
+          <label className="stacked-field"><span>备注</span><textarea name="note" rows={5} defaultValue={editorMilestone.note} placeholder="记录风险、下一步或需要跟进的事项…" /></label>
+          <fieldset className="color-options"><legend>强调色</legend>{ACCENT_COLORS.map((color) => <label key={color || "none"}><input type="radio" name="color" value={color} defaultChecked={editorMilestone.color === color} /><span style={{ background: color || "#ffffff" }}>{!color && "无"}</span></label>)}</fieldset>
+          {editorMilestone.updatedAt && <p className="last-updated">上次更新：{formatTime(editorMilestone.updatedAt)}</p>}
+        </div><div className="modal-footer"><button type="button" className="button ghost" onClick={() => setMilestoneEditor(null)}>取消</button><button className="button dark">保存里程碑</button></div>
+      </form></div>}
+
+      {settingsOpen && <div className="modal-layer"><section className="settings-modal">
+        <div className="modal-header"><div><span className="eyebrow">SETTINGS</span><h2>15 个阶段设置</h2><p>阶段数量固定；改名或排序不会丢失已有记录。</p></div><button className="icon-button" onClick={() => setSettingsOpen(false)}>×</button></div>
+        <div className="settings-body"><div className="definition-list">{settingsDraft.map((definition, index) => <div className="definition-row" key={definition.id}><span>{String(index + 1).padStart(2, "0")}</span><input value={definition.name} onChange={(event) => setSettingsDraft((current) => current.map((item) => item.id === definition.id ? { ...item, name: event.target.value } : item))} /><div><button disabled={index === 0} onClick={() => moveDefinition(index, -1)}>↑</button><button disabled={index === settingsDraft.length - 1} onClick={() => moveDefinition(index, 1)}>↓</button></div></div>)}</div>
+          <aside className="data-management"><h3>本机数据</h3><dl><div><dt>存储使用</dt><dd>{storageText}</dd></div><div><dt>最近备份</dt><dd>{formatTime(settings.lastBackupAt)}</dd></div><div><dt>项目 / 图片</dt><dd>{projects.length} / {images.length}</dd></div></dl><button className="button ghost full-button" onClick={openExport}>导出加密备份</button><button className="button danger full-button" onClick={clearLocalData}>清空本机数据</button><p>清空浏览器数据或更换电脑前，请先导出 .pboard 文件。</p></aside>
+        </div><div className="modal-footer"><button className="button ghost" onClick={() => setSettingsOpen(false)}>取消</button><button className="button dark" onClick={commitSettings}>保存设置</button></div>
+      </section></div>}
+
+      {backupMode && <div className="modal-layer compact-layer"><form className="compact-modal" onSubmit={runBackupOperation}>
+        <div className="modal-header"><div><span className="eyebrow">ENCRYPTED BACKUP</span><h2>{backupMode === "export" ? "导出加密备份" : "导入加密备份"}</h2><p>{backupMode === "export" ? "项目、备注和图片都会写入备份文件。" : importFile?.name}</p></div><button type="button" className="icon-button" onClick={() => setBackupMode(null)}>×</button></div>
+        <div className="modal-content"><label className="stacked-field"><span>备份密码</span><input type="password" minLength={8} value={backupPassword} onChange={(event) => setBackupPassword(event.target.value)} placeholder="至少 8 个字符" /></label>
+          {backupMode === "export" && <label className="stacked-field"><span>再次输入密码</span><input type="password" minLength={8} value={backupPasswordConfirm} onChange={(event) => setBackupPasswordConfirm(event.target.value)} /></label>}
+          <div className="security-note"><strong>请记住这个密码</strong><span>密码不会保存，也无法找回。建议通过与文件不同的渠道发送给接收方。</span></div>
+        </div><div className="modal-footer"><button type="button" className="button ghost" onClick={() => setBackupMode(null)}>取消</button><button className="button dark" disabled={busy}>{busy ? "处理中…" : backupMode === "export" ? "生成 .pboard" : "解密并导入"}</button></div>
+      </form></div>}
+
+      {previewImage && <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览"><button className="icon-button" onClick={() => setPreviewImageId(null)} aria-label="关闭图片预览">×</button><div><ImageThumb image={previewImage} alt={previewImage.name} /><p>{previewImage.name}</p></div></div>}
+    </main>
+  );
+}
