@@ -30,6 +30,7 @@ import { exportMilestoneCsv, exportProjectCsv } from "./lib/csv";
 type SaveState = "loading" | "saved" | "saving" | "error";
 type MilestoneEditorState = { projectId: string; subItemId: string; milestoneId: string } | null;
 type BackupMode = "export" | "import" | null;
+type BoardView = "active" | "completed";
 
 const ACCENT_COLORS = ["", "#FFCC00", "#F59E0B", "#EF4444", "#8B5CF6", "#0EA5E9", "#14B8A6"];
 const STATE_SYMBOLS: Record<MilestoneState, string> = {
@@ -41,6 +42,16 @@ const STATE_SYMBOLS: Record<MilestoneState, string> = {
 
 function progressPercent(subItem: SubItem): number {
   return Math.round((subItem.milestones.filter((item) => item.state === "done").length / 15) * 100);
+}
+
+function projectProgressPercent(project: Project): number {
+  const milestones = project.subItems.flatMap((subItem) => subItem.milestones);
+  if (!milestones.length) return 0;
+  return Math.round((milestones.filter((item) => item.state === "done").length / milestones.length) * 100);
+}
+
+function canMoveToCompleted(project: Project): boolean {
+  return project.subItems.length > 0 && project.subItems.every((subItem) => progressPercent(subItem) === 100);
 }
 
 function formatTime(value: string | null): string {
@@ -107,9 +118,11 @@ export function ProjectBoard() {
   const [images, setImages] = useState<ImageRecord[]>([]);
   const [saveState, setSaveState] = useState<SaveState>("loading");
   const [errorMessage, setErrorMessage] = useState("");
+  const [noticeMessage, setNoticeMessage] = useState("");
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<"all" | ProjectStatus>("all");
+  const [boardView, setBoardView] = useState<BoardView>("active");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [milestoneEditor, setMilestoneEditor] = useState<MilestoneEditorState>(null);
@@ -152,18 +165,23 @@ export function ProjectBoard() {
     [projects],
   );
 
+  const activeProjects = useMemo(() => projects.filter((project) => project.status !== "closed"), [projects]);
+  const completedProjects = useMemo(() => projects.filter((project) => project.status === "closed"), [projects]);
+  const currentBoardProjects = boardView === "completed" ? completedProjects : activeProjects;
+
   const filteredProjects = useMemo(() => {
     const query = search.trim().toLowerCase();
     return projects.filter((project) => {
+      const matchesBoard = boardView === "completed" ? project.status === "closed" : project.status !== "closed";
       const matchesSearch = !query || [project.projectNo, project.name, project.pm, project.dri, ...project.subItems.map((item) => item.name)]
         .join(" ")
         .toLowerCase()
         .includes(query);
       const matchesCategory = categoryFilter === "all" || project.category === categoryFilter;
       const matchesStatus = statusFilter === "all" || project.status === statusFilter;
-      return matchesSearch && matchesCategory && matchesStatus;
+      return matchesBoard && matchesSearch && matchesCategory && matchesStatus;
     });
-  }, [projects, search, categoryFilter, statusFilter]);
+  }, [projects, search, categoryFilter, statusFilter, boardView]);
 
   const visibleRowCount = filteredProjects.reduce((sum, project) => sum + project.subItems.length, 0);
 
@@ -215,6 +233,12 @@ export function ProjectBoard() {
       localStorage.setItem("project-board-compact-mode", next ? "1" : "0");
       return next;
     });
+  }
+
+  function switchBoardView(view: BoardView) {
+    setBoardView(view);
+    setStatusFilter("all");
+    setSelectedProjectId(null);
   }
 
   async function persistProject(project: Project) {
@@ -276,7 +300,28 @@ export function ProjectBoard() {
     };
     setProjects((current) => [...current, project]);
     await persistProject(project);
+    setBoardView("active");
+    setStatusFilter("all");
     setSelectedProjectId(project.id);
+  }
+
+  async function moveProjectToCompleted(project: Project) {
+    if (!canMoveToCompleted(project)) {
+      return alert("主项目下的所有子项都达到 100% 后，才能移入已完成看板。");
+    }
+    if (!confirm(`将“${project.projectNo || project.name}”移入已完成看板吗？项目详情、图片和里程碑记录都会保留。`)) return;
+    await commitProject({ ...project, status: "closed", updatedAt: new Date().toISOString() });
+    setSelectedProjectId(null);
+    setNoticeMessage(`“${project.projectNo || project.name}”已移入已完成看板`);
+  }
+
+  async function restoreProject(project: Project) {
+    if (!confirm(`将“${project.projectNo || project.name}”恢复到项目进度看板吗？`)) return;
+    await commitProject({ ...project, status: "ongoing", updatedAt: new Date().toISOString() });
+    setSelectedProjectId(null);
+    setBoardView("active");
+    setStatusFilter("all");
+    setNoticeMessage(`“${project.projectNo || project.name}”已恢复到项目进度看板`);
   }
 
   async function removeProject(project: Project) {
@@ -548,6 +593,10 @@ export function ProjectBoard() {
         <div className="error-banner" role="alert"><span>{errorMessage}</span><button onClick={() => setErrorMessage("")}>关闭</button></div>
       )}
 
+      {noticeMessage && (
+        <div className="notice-banner" role="status"><span>{noticeMessage}</span><button onClick={() => setNoticeMessage("")}>关闭</button></div>
+      )}
+
       {!settings.lastBackupAt && projects.length > 0 && (
         <div className="backup-banner">
           <div><strong>建议先做一次加密备份</strong><span>浏览器数据被清理后，只能通过 .pboard 文件恢复。</span></div>
@@ -557,27 +606,42 @@ export function ProjectBoard() {
 
       <section className="summary-strip" aria-label="项目统计">
         <div className="stat-card total"><span>主项目</span><strong>{projects.length}</strong><small>{totalSubItems} 个子项</small></div>
-        <button className={`stat-card ongoing ${statusFilter === "ongoing" ? "active" : ""}`} onClick={() => setStatusFilter(statusFilter === "ongoing" ? "all" : "ongoing")}>
+        <button className={`stat-card ongoing ${boardView === "active" && statusFilter === "ongoing" ? "active" : ""}`} onClick={() => {
+          setBoardView("active");
+          setStatusFilter(boardView === "active" && statusFilter === "ongoing" ? "all" : "ongoing");
+        }}>
           <span>进行中</span><strong>{projects.filter((project) => project.status === "ongoing").length}</strong><small>点击筛选</small>
         </button>
-        <button className={`stat-card risk ${statusFilter === "risk" ? "active" : ""}`} onClick={() => setStatusFilter(statusFilter === "risk" ? "all" : "risk")}>
+        <button className={`stat-card risk ${boardView === "active" && statusFilter === "risk" ? "active" : ""}`} onClick={() => {
+          setBoardView("active");
+          setStatusFilter(boardView === "active" && statusFilter === "risk" ? "all" : "risk");
+        }}>
           <span>风险</span><strong>{projects.filter((project) => project.status === "risk").length}</strong><small>点击筛选</small>
         </button>
-        <button className={`stat-card closed ${statusFilter === "closed" ? "active" : ""}`} onClick={() => setStatusFilter(statusFilter === "closed" ? "all" : "closed")}>
-          <span>已结案</span><strong>{projects.filter((project) => project.status === "closed").length}</strong><small>点击筛选</small>
+        <button className={`stat-card closed ${boardView === "completed" ? "active" : ""}`} onClick={() => switchBoardView("completed")}>
+          <span>已完成</span><strong>{completedProjects.length}</strong><small>打开完成看板</small>
         </button>
         <div className="stat-card progress"><span>平均完成度</span><strong>{overallProgress}%</strong><div className="mini-progress"><i style={{ width: `${overallProgress}%` }} /></div></div>
       </section>
+
+      <nav className="board-view-tabs" aria-label="切换项目看板">
+        <button className={boardView === "active" ? "active" : ""} aria-pressed={boardView === "active"} onClick={() => switchBoardView("active")}>
+          <span>项目进度</span><strong>{activeProjects.length}</strong>
+        </button>
+        <button className={boardView === "completed" ? "active" : ""} aria-pressed={boardView === "completed"} onClick={() => switchBoardView("completed")}>
+          <span>已完成</span><strong>{completedProjects.length}</strong>
+        </button>
+      </nav>
 
       <section className="toolbar">
         <label className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索项目、型号、负责人…" /></label>
         <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} aria-label="按类别筛选">
           <option value="all">全部类别</option>{categories.map((category) => <option key={category}>{category}</option>)}
         </select>
-        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "all" | ProjectStatus)} aria-label="按状态筛选">
-          <option value="all">全部状态</option><option value="ongoing">进行中</option><option value="risk">风险</option><option value="closed">已结案</option>
+        <select value={statusFilter} disabled={boardView === "completed"} onChange={(event) => setStatusFilter(event.target.value as "all" | ProjectStatus)} aria-label="按状态筛选">
+          {boardView === "completed" ? <option value="all">已完成项目</option> : <><option value="all">全部状态</option><option value="ongoing">进行中</option><option value="risk">风险</option></>}
         </select>
-        <span className="result-count">显示 {filteredProjects.length} / {projects.length} 个主项目</span>
+        <span className="result-count">显示 {filteredProjects.length} / {currentBoardProjects.length} 个主项目</span>
         {compactMode && <span className="compact-fit-note">已自动适配 {visibleRowCount} 行</span>}
         <div className="toolbar-spacer" />
         <button className="button ghost" onClick={() => exportProjectCsv(projects, images)}>项目 CSV</button>
@@ -607,6 +671,16 @@ export function ProjectBoard() {
             <p>新建空白项目，或导入私下收到的加密 .pboard 数据包。</p>
             <div><button className="button dark" onClick={addProject}>新建项目</button><button className="button ghost" onClick={() => importInputRef.current?.click()}>导入加密包</button></div>
           </div>
+        ) : filteredProjects.length === 0 ? (
+          <div className="empty-state board-empty">
+            <div className="empty-icon">{boardView === "completed" ? "✓" : "0"}</div>
+            <h2>{boardView === "completed" ? "还没有已完成项目" : "当前看板没有匹配项目"}</h2>
+            <p>{boardView === "completed" ? "项目达到 100% 后，可从详情抽屉移入这里。" : "可以清除筛选条件，或前往已完成看板查看。"}</p>
+            <div>{boardView === "completed"
+              ? <button className="button dark" onClick={() => switchBoardView("active")}>返回项目进度</button>
+              : <button className="button ghost" onClick={() => { setSearch(""); setCategoryFilter("all"); setStatusFilter("all"); }}>清除筛选</button>}
+            </div>
+          </div>
         ) : (
           <div className="board-scroll">
             <table className="board-table">
@@ -625,7 +699,10 @@ export function ProjectBoard() {
                   <tr key={subItem.id} className={subIndex === 0 ? "group-start" : "group-continuation"}>
                     <td className="sticky-col col-no">{subIndex === 0 ? project.no : ""}</td>
                     <td className="sticky-col col-project">
-                      {subIndex === 0 && <button className="project-link" onClick={() => setSelectedProjectId(project.id)}>{project.projectNo || project.name}<small>{project.name}</small></button>}
+                      {subIndex === 0 && <>
+                        <button className="project-link" onClick={() => setSelectedProjectId(project.id)}>{project.projectNo || project.name}<small>{project.name}</small></button>
+                        {boardView === "active" && canMoveToCompleted(project) && <button className="archive-row-action" onClick={() => moveProjectToCompleted(project)}>移入已完成</button>}
+                      </>}
                     </td>
                     <td className="sticky-col col-subitem"><strong>{subItem.name}</strong><small>{subItem.category || project.category} · {subItem.outputMonth || project.outputTime || "未定"}</small></td>
                     <td className="col-dri">{subItem.businessDri || "—"}</td>
@@ -673,10 +750,10 @@ export function ProjectBoard() {
                 <label><span>计划出样</span><input value={selectedProject.outputTime} onChange={(event) => updateProjectField(selectedProject.id, "outputTime", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
                 <label><span>出样数量</span><input value={selectedProject.outputQty} onChange={(event) => updateProjectField(selectedProject.id, "outputQty", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
                 <label><span>检查日期</span><input value={selectedProject.cp} onChange={(event) => updateProjectField(selectedProject.id, "cp", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
-                <label className="full"><span>整体状态</span><select value={selectedProject.status} onChange={async (event) => {
+                <label className="full"><span>整体状态</span><select value={selectedProject.status} disabled={selectedProject.status === "closed"} onChange={async (event) => {
                   const updated = { ...selectedProject, status: event.target.value as ProjectStatus, updatedAt: new Date().toISOString() };
                   await commitProject(updated);
-                }}><option value="ongoing">进行中</option><option value="risk">风险</option><option value="closed">已结案</option></select></label>
+                }}>{selectedProject.status === "closed" && <option value="closed">已完成</option>}<option value="ongoing">进行中</option><option value="risk">风险</option></select></label>
                 <label className="full"><span>负责人</span><textarea rows={3} value={selectedProject.dri} onChange={(event) => updateProjectField(selectedProject.id, "dri", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
                 <label className="full"><span>详细进展</span><textarea rows={8} value={selectedProject.detailProgress} onChange={(event) => updateProjectField(selectedProject.id, "detailProgress", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
               </div>
@@ -702,7 +779,15 @@ export function ProjectBoard() {
               </div>)}</div> : <p className="muted-block">暂无图片。上传后会自动压缩并只保存在本机。</p>}
             </section>
           </div>
-          <div className="drawer-footer"><button className="button danger" onClick={() => removeProject(selectedProject)}>删除项目</button><button className="button dark" onClick={() => setSelectedProjectId(null)}>完成</button></div>
+          <div className="drawer-footer">
+            <button className="button danger" onClick={() => removeProject(selectedProject)}>删除项目</button>
+            <div className="drawer-footer-actions">
+              {selectedProject.status === "closed"
+                ? <button className="button restore" onClick={() => restoreProject(selectedProject)}>恢复到进度看板</button>
+                : <button className="button complete" disabled={!canMoveToCompleted(selectedProject)} title={canMoveToCompleted(selectedProject) ? "" : "所有子项达到 100% 后可用"} onClick={() => moveProjectToCompleted(selectedProject)}>移入已完成看板 · {projectProgressPercent(selectedProject)}%</button>}
+              <button className="button dark" onClick={() => setSelectedProjectId(null)}>完成</button>
+            </div>
+          </div>
         </>}
       </aside>
 

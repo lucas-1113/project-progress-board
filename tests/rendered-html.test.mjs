@@ -50,4 +50,8 @@ test("keeps real template data out of the public application bundle", async () =
   assert.match(boardSource, /project-board-compact-mode/);
   assert.match(boardSource, /fitBoardToViewport/);
   assert.match(boardSource, /已自动适配/);
+  assert.match(boardSource, /canMoveToCompleted/);
+  assert.match(boardSource, /moveProjectToCompleted/);
+  assert.match(boardSource, /restoreProject/);
+  assert.match(boardSource, /已完成看板/);
 });

@@ -109,7 +109,7 @@ export const STATE_LABELS: Record<MilestoneState, string> = {
 export const STATUS_LABELS: Record<ProjectStatus, string> = {
   ongoing: "进行中",
   risk: "风险",
-  closed: "已结案",
+  closed: "已完成",
 };
 
 export function emptyMilestones(definitions: MilestoneDefinition[]): MilestoneEntry[] {
