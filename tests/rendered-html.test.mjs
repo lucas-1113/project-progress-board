@@ -44,6 +44,8 @@ test("keeps real template data out of the public application bundle", async () =
   assert.match(boardSource, /importExcelBackup/);
   assert.match(boardSource, /exportExcelBackup/);
   assert.match(boardSource, /导入 Excel/);
+  assert.match(boardSource, /导入旧版 \.xls/);
+  assert.match(boardSource, /importLegacyXls/);
   assert.match(boardSource, /导出 Excel/);
   assert.match(boardSource, /col-output-month">出样月份/);
   assert.doesNotMatch(publicOutput, /PBKDF2|AES-GCM|\.pboard|加密备份/);

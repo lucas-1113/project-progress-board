@@ -25,6 +25,7 @@ import {
   saveSettings,
 } from "./lib/db";
 import { exportExcelBackup, importExcelBackup } from "./lib/excel";
+import { importLegacyXls } from "./lib/legacy-xls";
 
 type SaveState = "loading" | "saved" | "saving" | "error";
 type MilestoneEditorState = { projectId: string; subItemId: string; milestoneId: string } | null;
@@ -132,6 +133,7 @@ export function ProjectBoard() {
   const [compactMode, setCompactMode] = useState(() => typeof window !== "undefined" && localStorage.getItem("project-board-compact-mode") === "1");
   const [compactMetrics, setCompactMetrics] = useState({ rowHeight: 30, headerHeight: 50, boardHeight: 700 });
   const importInputRef = useRef<HTMLInputElement>(null);
+  const legacyImportInputRef = useRef<HTMLInputElement>(null);
   const boardPanelRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -530,6 +532,38 @@ export function ProjectBoard() {
     }
   }
 
+  async function importLegacyExcel(file: File) {
+    if (busy) return;
+    setBusy(true);
+    setSaveState("saving");
+    try {
+      const result = await importLegacyXls(file);
+      const warningText = result.warnings.length ? `\n\n注意：\n${result.warnings.map((warning) => `• ${warning}`).join("\n")}` : "";
+      const confirmed = confirm(
+        `旧版表格解析完成：${result.projectCount} 个主项目、${result.subItemCount} 个子项、15 个阶段。导入后将替换当前本机数据。${warningText}\n\n是否继续？`,
+      );
+      if (!confirmed) {
+        setSaveState("saved");
+        return;
+      }
+      const data = await replaceAllData(result.payload);
+      setSettings(data.settings);
+      setProjects(data.projects);
+      setImages(data.images);
+      setSelectedProjectId(null);
+      setBoardView("active");
+      setStatusFilter("all");
+      setSaveState("saved");
+      setNoticeMessage(`已从旧版表格 ${file.name} 导入 ${data.projects.length} 个主项目。${result.warnings.length ? "请留意导入提示。" : ""}`);
+      refreshStorageEstimate();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "旧版 .xls 导入失败");
+      setSaveState("error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function clearLocalData() {
     const message = settings.lastBackupAt
       ? `最近备份：${formatTime(settings.lastBackupAt)}。确定清空本机全部项目和图片吗？`
@@ -637,13 +671,19 @@ export function ProjectBoard() {
         <span className="result-count">显示 {filteredProjects.length} / {currentBoardProjects.length} 个主项目</span>
         {compactMode && <span className="compact-fit-note">已自动适配 {visibleRowCount} 行</span>}
         <div className="toolbar-spacer" />
-        <button className="button ghost" disabled={busy} onClick={() => importInputRef.current?.click()}>导入 Excel</button>
+        <button className="button ghost" disabled={busy} onClick={() => legacyImportInputRef.current?.click()}>导入旧版 .xls</button>
+        <button className="button ghost" disabled={busy} onClick={() => importInputRef.current?.click()}>导入 Excel 备份</button>
         <button className="button ghost" disabled={busy} onClick={exportExcel}>{busy ? "正在处理…" : "导出 Excel"}</button>
         <button className="button dark" onClick={addProject}>＋ 新建项目</button>
         <input ref={importInputRef} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={(event) => {
           const file = event.target.files?.[0] ?? null;
           event.currentTarget.value = "";
           if (file) importExcel(file);
+        }} />
+        <input ref={legacyImportInputRef} type="file" accept=".xls,application/vnd.ms-excel" hidden onChange={(event) => {
+          const file = event.target.files?.[0] ?? null;
+          event.currentTarget.value = "";
+          if (file) importLegacyExcel(file);
         }} />
       </section>
 
@@ -659,8 +699,8 @@ export function ProjectBoard() {
         {projects.length === 0 ? (
           <div className="empty-state">
             <div className="empty-icon">15</div><h2>从一份项目开始</h2>
-            <p>新建空白项目，或导入之前导出的项目看板 Excel 备份。</p>
-            <div><button className="button dark" onClick={addProject}>新建项目</button><button className="button ghost" onClick={() => importInputRef.current?.click()}>导入 Excel</button></div>
+            <p>新建空白项目，导入旧版研发部 .xls 表格，或恢复项目看板 Excel 备份。</p>
+            <div><button className="button dark" onClick={addProject}>新建项目</button><button className="button ghost" onClick={() => legacyImportInputRef.current?.click()}>导入旧版 .xls</button><button className="button ghost" onClick={() => importInputRef.current?.click()}>导入 Excel 备份</button></div>
           </div>
         ) : filteredProjects.length === 0 ? (
           <div className="empty-state board-empty">
