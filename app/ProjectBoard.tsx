@@ -24,12 +24,10 @@ import {
   saveProject,
   saveSettings,
 } from "./lib/db";
-import { createPortablePayload, decryptPackage, downloadTextFile, encryptPayload } from "./lib/crypto";
-import { exportMilestoneCsv, exportProjectCsv } from "./lib/csv";
+import { exportExcelBackup, importExcelBackup } from "./lib/excel";
 
 type SaveState = "loading" | "saved" | "saving" | "error";
 type MilestoneEditorState = { projectId: string; subItemId: string; milestoneId: string } | null;
-type BackupMode = "export" | "import" | null;
 type BoardView = "active" | "completed";
 
 const ACCENT_COLORS = ["", "#FFCC00", "#F59E0B", "#EF4444", "#8B5CF6", "#0EA5E9", "#14B8A6"];
@@ -128,10 +126,6 @@ export function ProjectBoard() {
   const [milestoneEditor, setMilestoneEditor] = useState<MilestoneEditorState>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<MilestoneDefinition[]>([]);
-  const [backupMode, setBackupMode] = useState<BackupMode>(null);
-  const [backupPassword, setBackupPassword] = useState("");
-  const [backupPasswordConfirm, setBackupPasswordConfirm] = useState("");
-  const [importFile, setImportFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [storageText, setStorageText] = useState("正在读取…");
   const [previewImageId, setPreviewImageId] = useState<string | null>(null);
@@ -484,53 +478,52 @@ export function ProjectBoard() {
     setSettingsDraft(next);
   }
 
-  function openExport() {
-    setBackupMode("export");
-    setBackupPassword("");
-    setBackupPasswordConfirm("");
-  }
-
-  function openImport(file: File) {
-    setImportFile(file);
-    setBackupMode("import");
-    setBackupPassword("");
-    setBackupPasswordConfirm("");
-  }
-
-  async function runBackupOperation(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!backupMode) return;
-    if (backupPassword.length < 8) return alert("密码至少需要 8 个字符");
-    if (backupMode === "export" && backupPassword !== backupPasswordConfirm) return alert("两次输入的密码不一致");
+  async function exportExcel() {
+    if (busy) return;
     setBusy(true);
+    setSaveState("saving");
     try {
-      if (backupMode === "export") {
-        const timestamp = new Date().toISOString();
-        const updatedSettings = { ...settings, lastBackupAt: timestamp, updatedAt: timestamp };
-        const payload = await createPortablePayload(updatedSettings, projects, images);
-        const encrypted = await encryptPayload(payload, backupPassword);
-        downloadTextFile(encrypted, `项目看板备份-${timestamp.slice(0, 10)}.pboard`);
-        await saveSettings(updatedSettings);
-        setSettings(updatedSettings);
-      } else {
-        if (!importFile) throw new Error("请选择需要导入的 .pboard 文件");
-        const payload = await decryptPackage(await importFile.text(), backupPassword);
-        const confirmed = confirm(
-          `备份包含 ${payload.projects.length} 个主项目和 ${payload.images.length} 张图片。导入后将替换当前本机数据，是否继续？`,
-        );
-        if (!confirmed) return;
-        const data = await replaceAllData(payload);
-        setSettings(data.settings);
-        setProjects(data.projects);
-        setImages(data.images);
-        setSelectedProjectId(null);
-      }
-      setBackupMode(null);
-      setImportFile(null);
+      const timestamp = new Date().toISOString();
+      const updatedSettings = { ...settings, lastBackupAt: timestamp, updatedAt: timestamp };
+      await exportExcelBackup(updatedSettings, projects, images);
+      await saveSettings(updatedSettings);
+      setSettings(updatedSettings);
       setSaveState("saved");
+      setNoticeMessage("Excel 备份已导出，项目、里程碑、设置和图片都已包含在文件中。");
       refreshStorageEstimate();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "备份操作失败");
+      setErrorMessage(error instanceof Error ? error.message : "Excel 导出失败");
+      setSaveState("error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importExcel(file: File) {
+    if (busy) return;
+    setBusy(true);
+    setSaveState("saving");
+    try {
+      const payload = await importExcelBackup(file);
+      const confirmed = confirm(
+        `Excel 备份包含 ${payload.projects.length} 个主项目和 ${payload.images.length} 张图片。导入后将替换当前本机数据，是否继续？`,
+      );
+      if (!confirmed) {
+        setSaveState("saved");
+        return;
+      }
+      const data = await replaceAllData(payload);
+      setSettings(data.settings);
+      setProjects(data.projects);
+      setImages(data.images);
+      setSelectedProjectId(null);
+      setBoardView("active");
+      setStatusFilter("all");
+      setSaveState("saved");
+      setNoticeMessage(`已从 ${file.name} 导入 ${data.projects.length} 个主项目。`);
+      refreshStorageEstimate();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Excel 导入失败");
       setSaveState("error");
     } finally {
       setBusy(false);
@@ -540,7 +533,7 @@ export function ProjectBoard() {
   async function clearLocalData() {
     const message = settings.lastBackupAt
       ? `最近备份：${formatTime(settings.lastBackupAt)}。确定清空本机全部项目和图片吗？`
-      : "你尚未做过加密备份。清空后无法恢复，仍要继续吗？";
+      : "你尚未导出过 Excel 备份。清空后无法恢复，仍要继续吗？";
     if (!confirm(message) || !confirm("请再次确认：删除本机全部项目数据。")) return;
     const emptySettings = createEmptySettings();
     const data = await replaceAllData({
@@ -572,7 +565,7 @@ export function ProjectBoard() {
       <header className="topbar">
         <div className="brand-block">
           <div className="brand-mark">15</div>
-          <div><h1>项目进度看板</h1><p>一页看清 · 本机保存 · 可加密交付</p></div>
+          <div><h1>项目进度看板</h1><p>一页看清 · 本机保存 · Excel 备份</p></div>
         </div>
         <div className="topbar-actions">
           <span className={`save-indicator ${saveState}`} aria-live="polite">
@@ -599,8 +592,8 @@ export function ProjectBoard() {
 
       {!settings.lastBackupAt && projects.length > 0 && (
         <div className="backup-banner">
-          <div><strong>建议先做一次加密备份</strong><span>浏览器数据被清理后，只能通过 .pboard 文件恢复。</span></div>
-          <button className="button warning" onClick={openExport}>立即备份</button>
+          <div><strong>建议先导出一份 Excel 备份</strong><span>项目、里程碑、设置和图片都会保存在同一个 .xlsx 文件中。</span></div>
+          <button className="button warning" disabled={busy} onClick={exportExcel}>{busy ? "正在生成…" : "导出 Excel"}</button>
         </div>
       )}
 
@@ -644,15 +637,13 @@ export function ProjectBoard() {
         <span className="result-count">显示 {filteredProjects.length} / {currentBoardProjects.length} 个主项目</span>
         {compactMode && <span className="compact-fit-note">已自动适配 {visibleRowCount} 行</span>}
         <div className="toolbar-spacer" />
-        <button className="button ghost" onClick={() => exportProjectCsv(projects, images)}>项目 CSV</button>
-        <button className="button ghost" onClick={() => exportMilestoneCsv(projects, settings)}>里程碑 CSV</button>
-        <button className="button ghost" onClick={() => importInputRef.current?.click()}>导入备份</button>
-        <button className="button ghost" onClick={openExport}>加密备份</button>
+        <button className="button ghost" disabled={busy} onClick={() => importInputRef.current?.click()}>导入 Excel</button>
+        <button className="button ghost" disabled={busy} onClick={exportExcel}>{busy ? "正在处理…" : "导出 Excel"}</button>
         <button className="button dark" onClick={addProject}>＋ 新建项目</button>
-        <input ref={importInputRef} type="file" accept=".pboard,application/json" hidden onChange={(event) => {
+        <input ref={importInputRef} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={(event) => {
           const file = event.target.files?.[0] ?? null;
           event.currentTarget.value = "";
-          if (file) openImport(file);
+          if (file) importExcel(file);
         }} />
       </section>
 
@@ -668,8 +659,8 @@ export function ProjectBoard() {
         {projects.length === 0 ? (
           <div className="empty-state">
             <div className="empty-icon">15</div><h2>从一份项目开始</h2>
-            <p>新建空白项目，或导入私下收到的加密 .pboard 数据包。</p>
-            <div><button className="button dark" onClick={addProject}>新建项目</button><button className="button ghost" onClick={() => importInputRef.current?.click()}>导入加密包</button></div>
+            <p>新建空白项目，或导入之前导出的项目看板 Excel 备份。</p>
+            <div><button className="button dark" onClick={addProject}>新建项目</button><button className="button ghost" onClick={() => importInputRef.current?.click()}>导入 Excel</button></div>
           </div>
         ) : filteredProjects.length === 0 ? (
           <div className="empty-state board-empty">
@@ -796,7 +787,7 @@ export function ProjectBoard() {
         <div className="detail-table-wrap"><table className="detail-table"><thead><tr><th>No.</th><th>PM</th><th>项目编号 / 名称</th><th>类别</th><th>需求数量</th><th>计划出样</th><th>出样数量</th><th>详细进展</th><th>负责人</th><th>检查日期</th><th>状态</th><th>图片</th></tr></thead>
           <tbody>{filteredProjects.map((project) => <tr key={project.id}><td>{project.no}</td><td>{project.pm}</td><td><button className="project-link" onClick={() => { setSelectedProjectId(project.id); setDetailsOpen(false); }}>{project.projectNo}<small>{project.name}</small></button></td><td>{project.category}</td><td>{project.demandQty}</td><td>{project.outputTime}</td><td>{project.outputQty}</td><td className="progress-copy">{project.detailProgress || "—"}</td><td className="dri-copy">{project.dri || "—"}</td><td>{project.cp}</td><td><span className={`status-chip ${project.status}`}>{STATUS_LABELS[project.status]}</span></td><td>{images.filter((image) => image.projectId === project.id).length}</td></tr>)}</tbody>
         </table></div>
-        <div className="modal-footer"><button className="button ghost" onClick={() => exportProjectCsv(projects, images)}>导出项目 CSV</button><button className="button dark" onClick={() => setDetailsOpen(false)}>返回看板</button></div>
+        <div className="modal-footer"><button className="button ghost" disabled={busy} onClick={exportExcel}>{busy ? "正在生成…" : "导出 Excel"}</button><button className="button dark" onClick={() => setDetailsOpen(false)}>返回看板</button></div>
       </section></div>}
 
       {milestoneEditor && editorMilestone && <div className="modal-layer compact-layer"><form className="compact-modal" onSubmit={saveMilestone}>
@@ -812,17 +803,9 @@ export function ProjectBoard() {
       {settingsOpen && <div className="modal-layer"><section className="settings-modal">
         <div className="modal-header"><div><span className="eyebrow">SETTINGS</span><h2>15 个阶段设置</h2><p>阶段数量固定；改名或排序不会丢失已有记录。</p></div><button className="icon-button" onClick={() => setSettingsOpen(false)}>×</button></div>
         <div className="settings-body"><div className="definition-list">{settingsDraft.map((definition, index) => <div className="definition-row" key={definition.id}><span>{String(index + 1).padStart(2, "0")}</span><input value={definition.name} onChange={(event) => setSettingsDraft((current) => current.map((item) => item.id === definition.id ? { ...item, name: event.target.value } : item))} /><div><button disabled={index === 0} onClick={() => moveDefinition(index, -1)}>↑</button><button disabled={index === settingsDraft.length - 1} onClick={() => moveDefinition(index, 1)}>↓</button></div></div>)}</div>
-          <aside className="data-management"><h3>本机数据</h3><dl><div><dt>存储使用</dt><dd>{storageText}</dd></div><div><dt>最近备份</dt><dd>{formatTime(settings.lastBackupAt)}</dd></div><div><dt>项目 / 图片</dt><dd>{projects.length} / {images.length}</dd></div></dl><button className="button ghost full-button" onClick={openExport}>导出加密备份</button><button className="button danger full-button" onClick={clearLocalData}>清空本机数据</button><p>清空浏览器数据或更换电脑前，请先导出 .pboard 文件。</p></aside>
+          <aside className="data-management"><h3>本机数据</h3><dl><div><dt>存储使用</dt><dd>{storageText}</dd></div><div><dt>最近备份</dt><dd>{formatTime(settings.lastBackupAt)}</dd></div><div><dt>项目 / 图片</dt><dd>{projects.length} / {images.length}</dd></div></dl><button className="button ghost full-button" disabled={busy} onClick={exportExcel}>{busy ? "正在生成…" : "导出 Excel 备份"}</button><button className="button danger full-button" onClick={clearLocalData}>清空本机数据</button><p>清空浏览器数据或更换电脑前，请先导出 .xlsx 文件。</p></aside>
         </div><div className="modal-footer"><button className="button ghost" onClick={() => setSettingsOpen(false)}>取消</button><button className="button dark" onClick={commitSettings}>保存设置</button></div>
       </section></div>}
-
-      {backupMode && <div className="modal-layer compact-layer"><form className="compact-modal" onSubmit={runBackupOperation}>
-        <div className="modal-header"><div><span className="eyebrow">ENCRYPTED BACKUP</span><h2>{backupMode === "export" ? "导出加密备份" : "导入加密备份"}</h2><p>{backupMode === "export" ? "项目、备注和图片都会写入备份文件。" : importFile?.name}</p></div><button type="button" className="icon-button" onClick={() => setBackupMode(null)}>×</button></div>
-        <div className="modal-content"><label className="stacked-field"><span>备份密码</span><input type="password" minLength={8} value={backupPassword} onChange={(event) => setBackupPassword(event.target.value)} placeholder="至少 8 个字符" /></label>
-          {backupMode === "export" && <label className="stacked-field"><span>再次输入密码</span><input type="password" minLength={8} value={backupPasswordConfirm} onChange={(event) => setBackupPasswordConfirm(event.target.value)} /></label>}
-          <div className="security-note"><strong>请记住这个密码</strong><span>密码不会保存，也无法找回。建议通过与文件不同的渠道发送给接收方。</span></div>
-        </div><div className="modal-footer"><button type="button" className="button ghost" onClick={() => setBackupMode(null)}>取消</button><button className="button dark" disabled={busy}>{busy ? "处理中…" : backupMode === "export" ? "生成 .pboard" : "解密并导入"}</button></div>
-      </form></div>}
 
       {previewImage && <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览"><button className="icon-button" onClick={() => setPreviewImageId(null)} aria-label="关闭图片预览">×</button><div><ImageThumb image={previewImage} alt={previewImage.name} /><p>{previewImage.name}</p></div></div>}
     </main>

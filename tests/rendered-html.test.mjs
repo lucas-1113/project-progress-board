@@ -41,11 +41,11 @@ test("keeps real template data out of the public application bundle", async () =
   const publicOutput = `${html}\n${assetText}`;
 
   assert.doesNotMatch(publicOutput, /RL-134C|研发部项目进度追踪表模版|\/Users\/lumen/);
-  assert.match(boardSource, /openImport/);
-  assert.match(boardSource, /openExport/);
-  assert.match(boardSource, /runBackupOperation/);
-  assert.match(boardSource, /exportProjectCsv/);
-  assert.match(boardSource, /exportMilestoneCsv/);
+  assert.match(boardSource, /importExcelBackup/);
+  assert.match(boardSource, /exportExcelBackup/);
+  assert.match(boardSource, /导入 Excel/);
+  assert.match(boardSource, /导出 Excel/);
+  assert.doesNotMatch(publicOutput, /PBKDF2|AES-GCM|\.pboard|加密备份/);
   assert.match(boardSource, /existing\.length \+ files\.length > 8/);
   assert.match(boardSource, /project-board-compact-mode/);
   assert.match(boardSource, /fitBoardToViewport/);

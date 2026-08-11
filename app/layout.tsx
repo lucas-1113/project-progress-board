@@ -4,7 +4,7 @@ import { PwaRegistration } from "./PwaRegistration";
 
 export const metadata: Metadata = {
   title: "项目进度看板",
-  description: "本机保存、可加密备份的个人项目进度规划工具。",
+  description: "本机保存、支持 Excel 备份的个人项目进度规划工具。",
   manifest: "./manifest.webmanifest",
   openGraph: {
     title: "项目进度看板",
