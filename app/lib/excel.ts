@@ -256,9 +256,47 @@ function extractBusinessDri(dri: string): string {
   return target.replace(/^[\s\S]*?[:：]/, "").trim();
 }
 
+const TRACKING_IMAGE_MAX_WIDTH = 160;
+const TRACKING_IMAGE_MAX_HEIGHT = 120;
+const TRACKING_IMAGE_PADDING = 8;
+
+async function blobToPngBase64(blob: Blob): Promise<{ base64: string; width: number; height: number }> {
+  const url = URL.createObjectURL(blob);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("图片无法读取"));
+      element.src = url;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("浏览器无法处理图片");
+    context.drawImage(image, 0, 0);
+    const pngBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!pngBlob) throw new Error("图片转 PNG 失败");
+    const bytes = new Uint8Array(await pngBlob.arrayBuffer());
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+    }
+    return { base64: btoa(binary), width: image.naturalWidth, height: image.naturalHeight };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function fitTrackingImage(width: number, height: number): { width: number; height: number } {
+  const ratio = Math.min(TRACKING_IMAGE_MAX_WIDTH / width, TRACKING_IMAGE_MAX_HEIGHT / height, 1);
+  return { width: Math.max(1, Math.round(width * ratio)), height: Math.max(1, Math.round(height * ratio)) };
+}
+
 export async function exportTrackingSheet(settings: AppSettings, projects: Project[], images: ImageRecord[]): Promise<void> {
-  const XLSX = await import("xlsx");
-  const workbook = XLSX.utils.book_new();
+  const ExcelJS = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
   const stageDefs = settings.milestoneDefinitions;
   const total = projects.length;
   const countByStatus = (status: ProjectStatus) => projects.filter((project) => project.status === status).length;
@@ -279,62 +317,118 @@ export async function exportTrackingSheet(settings: AppSettings, projects: Proje
     return "\u25A0".repeat(filled) + "\u25A1".repeat(empty) + ` ${pct}%`;
   };
 
-  // ---- Summary sheet: 阶段勾选汇总 + 项目进度 ----
-  const summaryRows: CellValue[][] = [];
-  summaryRows.push([null, `项目进度追踪表-${monthLabel}`]);
-  summaryRows.push([null, "序号", "项目类别", "项目名称", "业务DRI", "出样月份", ...stageDefs.map((definition) => stageHeader(definition.name)), "项目进度"]);
+  // ---- Summary sheet ----
+  const summarySheet = workbook.addWorksheet("Summary");
+  summarySheet.addRow([]);
+  const titleRow = summarySheet.addRow([null, `项目进度追踪表-${monthLabel}`]);
+  titleRow.getCell(2).font = { bold: true, size: 14 };
+  summarySheet.mergeCells(2, 2, 2, 7 + stageDefs.length);
+  titleRow.getCell(2).alignment = { horizontal: "center", vertical: "middle" };
+  titleRow.height = 28;
+
+  const summaryHeader = summarySheet.addRow([
+    null, "序号", "项目类别", "项目名称", "业务DRI", "出样月份",
+    ...stageDefs.map((definition) => stageHeader(definition.name)),
+    "项目进度",
+  ]);
+  summaryHeader.eachCell((cell) => {
+    cell.font = { bold: true };
+    cell.alignment = { horizontal: "center", vertical: "center", wrapText: true };
+  });
+
   for (const project of projects) {
     const doneCount = stageDefs.filter((definition) => isStageDone(project, definition.id)).length;
-    const row: CellValue[] = [
+    const row = summarySheet.addRow([
       null, project.no, project.category, project.name, extractBusinessDri(project.dri), project.outputTime,
       ...stageDefs.map((definition) => (isStageDone(project, definition.id) ? "✓" : "")),
       progressBar(doneCount, stageDefs.length),
-    ];
-    summaryRows.push(row);
-  }
-  const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
-  summarySheet["!cols"] = [
-    { wch: 3 }, { wch: 6 }, { wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 10 },
-    ...stageDefs.map(() => ({ wch: 12 })),
-    { wch: 22 },
-  ];
-  const boldRow = (sheet: XLSX.WorkSheet, rowIndex: number, lastColumn: number): void => {
-    for (let column = 1; column <= lastColumn; column += 1) {
-      const cell = sheet[XLSX.utils.encode_cell({ r: rowIndex, c: column })];
-      if (cell) cell.s = { font: { bold: true } };
-    }
-  };
-  boldRow(summarySheet, 1, 6 + stageDefs.length);
-
-  // ---- Detail sheet: 项目明细 + 统计区 ----
-  const detailRows: CellValue[][] = [];
-  detailRows.push([null]);
-  detailRows.push([null, "Define", null, null, "Category", "Q'ty", "Rate", "Remark"]);
-  detailRows.push([null, "已结案", null, null, "Closed", closed, rate(closed), ""]);
-  detailRows.push([null, "计划内", null, null, "Ongoing", ongoing, rate(ongoing), ""]);
-  detailRows.push([null, "项目存在异常/延期风险", null, null, "Risk", risk, rate(risk), ""]);
-  detailRows.push([null, "Total", null, null, "", total, "", ""]);
-  detailRows.push([]);
-  detailRows.push([]);
-  detailRows.push([null, "No.", "PM", "Project No", "Project Name", "Category", "Demand Q'ty", "Output Time", "Output Q'ty", "Progress", "DRI", "CP", "Status", "Picture"]);
-  for (const project of projects) {
-    const pictureCount = images.filter((image) => image.projectId === project.id).length;
-    detailRows.push([
-      null, project.no, project.pm, project.projectNo, project.name, project.category,
-      project.demandQty, project.outputTime, project.outputQty, project.detailProgress,
-      project.dri, project.cp, STATUS_LABELS[project.status], pictureCount,
     ]);
+    row.eachCell((cell, colNumber) => {
+      if (colNumber >= 7 && colNumber <= 6 + stageDefs.length) {
+        cell.alignment = { horizontal: "center", vertical: "center" };
+      }
+    });
   }
-  const detailSheet = XLSX.utils.aoa_to_sheet(detailRows);
-  detailSheet["!cols"] = [
-    { wch: 3 }, { wch: 5 }, { wch: 10 }, { wch: 22 }, { wch: 34 }, { wch: 12 }, { wch: 12 },
-    { wch: 12 }, { wch: 10 }, { wch: 50 }, { wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 8 },
-  ];
-  boldRow(detailSheet, 8, 13);
 
-  XLSX.utils.book_append_sheet(workbook, summarySheet, "Summary");
-  XLSX.utils.book_append_sheet(workbook, detailSheet, "Detail");
-  XLSX.writeFileXLSX(workbook, `项目进度追踪表-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  summarySheet.columns = [
+    { width: 3 }, { width: 6 }, { width: 12 }, { width: 30 }, { width: 14 }, { width: 10 },
+    ...stageDefs.map(() => ({ width: 12 })),
+    { width: 22 },
+  ];
+  summaryHeader.height = 36;
+
+  // ---- Detail sheet ----
+  const detailSheet = workbook.addWorksheet("Detail");
+  detailSheet.addRow([]);
+  const statsHeader = detailSheet.addRow([null, "Define", null, null, "Category", "Q'ty", "Rate", "Remark"]);
+  statsHeader.eachCell((cell) => { cell.font = { bold: true }; });
+  detailSheet.addRow([null, "已结案", null, null, "Closed", closed, rate(closed), ""]);
+  detailSheet.addRow([null, "计划内", null, null, "Ongoing", ongoing, rate(ongoing), ""]);
+  detailSheet.addRow([null, "项目存在异常/延期风险", null, null, "Risk", risk, rate(risk), ""]);
+  detailSheet.addRow([null, "Total", null, null, "", total, "", ""]);
+  detailSheet.addRow([]);
+  detailSheet.addRow([]);
+
+  const detailHeader = detailSheet.addRow([
+    null, "No.", "PM", "Project No", "Project Name", "Category", "Demand Q'ty",
+    "Output\nTime", "Output\nQ'ty", "Progress", "DRI", "CP", "Status", "Picture",
+  ]);
+  detailHeader.eachCell((cell) => {
+    cell.font = { bold: true };
+    cell.alignment = { horizontal: "center", vertical: "center", wrapText: true };
+  });
+  detailHeader.height = 36;
+
+  const projectImages = new Map<string, ImageRecord[]>();
+  for (const image of images) {
+    const list = projectImages.get(image.projectId) ?? [];
+    list.push(image);
+    projectImages.set(image.projectId, list);
+  }
+
+  const pictureColumnIndex = 13; // N column, 0-indexed
+  for (const project of projects) {
+    const progressText = project.detailProgress || "";
+    const row = detailSheet.addRow([
+      null, project.no, project.pm, project.projectNo, project.name, project.category,
+      project.demandQty, project.outputTime, project.outputQty, progressText,
+      project.dri, project.cp, STATUS_LABELS[project.status], "",
+    ]);
+    row.getCell(10).alignment = { wrapText: true, vertical: "top" };
+    row.height = 36;
+
+    const projectImageList = projectImages.get(project.id) ?? [];
+    const primaryImage = projectImageList.sort((a, b) => a.order - b.order)[0];
+    if (primaryImage) {
+      try {
+        const { base64, width, height } = await blobToPngBase64(primaryImage.blob);
+        const fitted = fitTrackingImage(width, height);
+        const imageId = workbook.addImage({ base64, extension: "png" });
+        detailSheet.addImage(imageId, {
+          tl: { col: pictureColumnIndex, row: row.number - 1 },
+          ext: { width: fitted.width, height: fitted.height },
+        });
+        row.height = Math.max(36, fitted.height + TRACKING_IMAGE_PADDING);
+        row.getCell(pictureColumnIndex + 1).value = "";
+      } catch {
+        row.getCell(pictureColumnIndex + 1).value = "图片加载失败";
+      }
+    }
+  }
+
+  detailSheet.columns = [
+    { width: 3 }, { width: 5 }, { width: 10 }, { width: 22 }, { width: 34 }, { width: 12 },
+    { width: 12 }, { width: 12 }, { width: 10 }, { width: 50 }, { width: 24 }, { width: 12 }, { width: 12 }, { width: 24 },
+  ];
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `项目进度追踪表-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 export async function importExcelBackup(file: File): Promise<PortablePayload> {
