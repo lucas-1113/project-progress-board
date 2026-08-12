@@ -50,6 +50,7 @@ export interface AppSettings {
   milestoneDefinitions: MilestoneDefinition[];
   lastBackupAt: string | null;
   updatedAt: string;
+  warningDays: number;
 }
 
 export interface ImageRecord {
@@ -102,7 +103,7 @@ export const DEFAULT_MILESTONES: MilestoneDefinition[] = [
 export const STATE_LABELS: Record<MilestoneState, string> = {
   not_started: "未开始",
   in_progress: "进行中",
-  done: "已完成",
+  done: "完成",
   blocked: "阻塞",
 };
 
@@ -128,5 +129,6 @@ export function createEmptySettings(): AppSettings {
     milestoneDefinitions: DEFAULT_MILESTONES,
     lastBackupAt: null,
     updatedAt: new Date().toISOString(),
+    warningDays: 3,
   };
 }

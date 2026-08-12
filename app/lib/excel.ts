@@ -20,6 +20,16 @@ function text(value: CellValue): string {
   return value == null ? "" : String(value).trim();
 }
 
+const DATE_FORMAT = "yyyy-mm-dd hh:mm:ss";
+
+function toExcelDate(value: CellValue): number | string {
+  const raw = text(value);
+  if (!raw) return "";
+  const ms = Date.parse(raw);
+  if (Number.isNaN(ms)) return raw;
+  return ms / 86_400_000 + 25_569;
+}
+
 function numberOrText(value: CellValue): string | number {
   return typeof value === "number" ? value : text(value);
 }
@@ -64,7 +74,6 @@ function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
 
 function setSheetLayout(sheet: { [key: string]: unknown }, widths: number[], rowCount: number, columnCount: number): void {
   sheet["!cols"] = widths.map((wch) => ({ wch }));
-  sheet["!autofilter"] = { ref: `A1:${columnName(columnCount)}${Math.max(1, rowCount + 1)}` };
 }
 
 function columnName(columnCount: number): string {
@@ -115,6 +124,16 @@ export async function exportExcelBackup(settings: AppSettings, projects: Project
   const workbook = XLSX.utils.book_new();
   const exportedAt = new Date().toISOString();
 
+  const applyDateColumns = (sheet: XLSX.WorkSheet, columnIndexes: number[]): void => {
+    const range = XLSX.utils.decode_range(sheet["!ref"] as string);
+    for (let row = range.s.r; row <= range.e.r; row += 1) {
+      for (const column of columnIndexes) {
+        const cell = sheet[XLSX.utils.encode_cell({ r: row, c: column })];
+        if (cell && typeof cell.v === "number") cell.z = DATE_FORMAT;
+      }
+    }
+  };
+
   const projectRows: Row[] = projects.map((project) => ({
     项目ID: project.id,
     序号: project.no,
@@ -129,8 +148,8 @@ export async function exportExcelBackup(settings: AppSettings, projects: Project
     负责人: project.dri,
     检查日期: project.cp,
     状态: STATUS_LABELS[project.status],
-    创建时间: project.createdAt,
-    更新时间: project.updatedAt,
+    创建时间: toExcelDate(project.createdAt),
+    更新时间: toExcelDate(project.updatedAt),
     子项数量: project.subItems.length,
     图片数量: images.filter((image) => image.projectId === project.id).length,
   }));
@@ -139,7 +158,7 @@ export async function exportExcelBackup(settings: AppSettings, projects: Project
     "负责人", "检查日期", "状态", "创建时间", "更新时间", "子项数量", "图片数量",
   ] });
   setSheetLayout(projectSheet, [38, 8, 12, 22, 28, 18, 12, 14, 12, 48, 24, 14, 12, 24, 24, 10, 10], projectRows.length, 17);
-  XLSX.utils.book_append_sheet(workbook, projectSheet, SHEETS.projects);
+  applyDateColumns(projectSheet, [13, 14]);
 
   const milestoneRows: Row[] = [];
   projects.forEach((project) => project.subItems.forEach((subItem) => {
@@ -153,17 +172,17 @@ export async function exportExcelBackup(settings: AppSettings, projects: Project
         子项ID: subItem.id,
         子项名称: subItem.name,
         子项类别: subItem.category,
-        业务DRI: subItem.businessDri,
-        出样月份: subItem.outputMonth,
-        子项创建时间: subItem.createdAt,
-        子项更新时间: subItem.updatedAt,
+    业务DRI: subItem.businessDri,
+    出样月份: subItem.outputMonth,
+    子项创建时间: toExcelDate(subItem.createdAt),
+    子项更新时间: toExcelDate(subItem.updatedAt),
         阶段ID: definition.id,
         阶段序号: index + 1,
         阶段名称: definition.name,
         状态: STATE_LABELS[milestone?.state ?? "not_started"],
         备注: milestone?.note ?? "",
         强调色: milestone?.color ?? "",
-        更新时间: milestone?.updatedAt ?? "",
+        更新时间: toExcelDate(milestone?.updatedAt ?? ""),
       });
     });
   }));
@@ -172,14 +191,13 @@ export async function exportExcelBackup(settings: AppSettings, projects: Project
     "子项更新时间", "阶段ID", "阶段序号", "阶段名称", "状态", "备注", "强调色", "更新时间",
   ] });
   setSheetLayout(milestoneSheet, [38, 10, 22, 38, 28, 18, 16, 14, 24, 24, 12, 10, 28, 12, 42, 12, 24], milestoneRows.length, 17);
-  XLSX.utils.book_append_sheet(workbook, milestoneSheet, SHEETS.milestones);
+  applyDateColumns(milestoneSheet, [8, 9, 16]);
 
   const definitionRows = [...settings.milestoneDefinitions]
     .sort((a, b) => a.order - b.order)
     .map((definition) => ({ 阶段ID: definition.id, 阶段名称: definition.name, 显示顺序: definition.order + 1 }));
   const settingsSheet = XLSX.utils.json_to_sheet(definitionRows, { header: ["阶段ID", "阶段名称", "显示顺序"] });
   setSheetLayout(settingsSheet, [14, 32, 12], definitionRows.length, 3);
-  XLSX.utils.book_append_sheet(workbook, settingsSheet, SHEETS.settings);
 
   const imageRows: Row[] = [];
   for (const image of images) {
@@ -191,7 +209,7 @@ export async function exportExcelBackup(settings: AppSettings, projects: Project
       文件名: image.name,
       类型: image.type,
       顺序: image.order,
-      创建时间: image.createdAt,
+      创建时间: toExcelDate(image.createdAt),
       分片序号: index + 1,
       分片总数: chunks.length,
       Base64数据: chunk,
@@ -201,25 +219,33 @@ export async function exportExcelBackup(settings: AppSettings, projects: Project
     "图片ID", "项目ID", "文件名", "类型", "顺序", "创建时间", "分片序号", "分片总数", "Base64数据",
   ] });
   setSheetLayout(imageSheet, [38, 38, 28, 18, 8, 24, 10, 10, 18], imageRows.length, 9);
-  XLSX.utils.book_append_sheet(workbook, imageSheet, SHEETS.images);
+  applyDateColumns(imageSheet, [5]);
 
   const infoRows: Array<[string, string | number]> = [
     ["格式标识", FORMAT_ID],
     ["版本", FORMAT_VERSION],
-    ["导出时间", exportedAt],
+    ["导出时间", toExcelDate(exportedAt)],
     ["项目数量", projects.length],
     ["子项数量", projects.reduce((sum, project) => sum + project.subItems.length, 0)],
     ["阶段数量", settings.milestoneDefinitions.length],
     ["图片数量", images.length],
-    ["设置更新时间", settings.updatedAt],
-    ["最近备份时间", settings.lastBackupAt ?? exportedAt],
+    ["设置更新时间", toExcelDate(settings.updatedAt)],
+    ["最近备份时间", toExcelDate(settings.lastBackupAt ?? exportedAt)],
     ["说明", "此工作簿是项目进度看板的完整普通备份。请勿删除工作表或修改 ID 列。"],
   ];
   const infoSheet = XLSX.utils.aoa_to_sheet([["项目进度看板 Excel 备份", ""], ...infoRows]);
   infoSheet["!cols"] = [{ wch: 22 }, { wch: 80 }];
-  XLSX.utils.book_append_sheet(workbook, infoSheet, SHEETS.info);
+  for (const dateRow of [3, 8, 9]) {
+    const cell = infoSheet[XLSX.utils.encode_cell({ r: dateRow, c: 1 })];
+    if (cell && typeof cell.v === "number") cell.z = DATE_FORMAT;
+  }
 
-  workbook.Workbook = { Sheets: workbook.SheetNames.map((name) => ({ Hidden: name === SHEETS.images ? 1 : 0 })) };
+  XLSX.utils.book_append_sheet(workbook, infoSheet, SHEETS.info);
+  XLSX.utils.book_append_sheet(workbook, projectSheet, SHEETS.projects);
+  XLSX.utils.book_append_sheet(workbook, milestoneSheet, SHEETS.milestones);
+  XLSX.utils.book_append_sheet(workbook, settingsSheet, SHEETS.settings);
+  XLSX.utils.book_append_sheet(workbook, imageSheet, SHEETS.images);
+  workbook.Workbook = { Sheets: workbook.SheetNames.map(() => ({ Hidden: 0 })) };
   XLSX.writeFileXLSX(workbook, `项目进度看板备份-${exportedAt.slice(0, 10)}.xlsx`);
 }
 

@@ -26,6 +26,7 @@ import {
 } from "./lib/db";
 import { exportExcelBackup, importExcelBackup } from "./lib/excel";
 import { importLegacyXls } from "./lib/legacy-xls";
+import { formatCheckDate, getReminder, parseCheckDate, reminderLabel } from "./lib/reminder";
 
 type SaveState = "loading" | "saved" | "saving" | "error";
 type MilestoneEditorState = { projectId: string; subItemId: string; milestoneId: string } | null;
@@ -127,6 +128,8 @@ export function ProjectBoard() {
   const [milestoneEditor, setMilestoneEditor] = useState<MilestoneEditorState>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<MilestoneDefinition[]>([]);
+  const [warningDaysDraft, setWarningDaysDraft] = useState<number>(3);
+  const [reminderHidden, setReminderHidden] = useState(false);
   const [busy, setBusy] = useState(false);
   const [storageText, setStorageText] = useState("正在读取…");
   const [previewImageId, setPreviewImageId] = useState<string | null>(null);
@@ -164,6 +167,23 @@ export function ProjectBoard() {
   const activeProjects = useMemo(() => projects.filter((project) => project.status !== "closed"), [projects]);
   const completedProjects = useMemo(() => projects.filter((project) => project.status === "closed"), [projects]);
   const currentBoardProjects = boardView === "completed" ? completedProjects : activeProjects;
+
+  const warningDays = settings.warningDays ?? 3;
+  const reminders = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof getReminder>>();
+    for (const project of projects) map.set(project.id, getReminder(project.cp, warningDays));
+    return map;
+  }, [projects, warningDays]);
+  const dueReminders = useMemo(
+    () => projects
+      .filter((project) => project.status !== "closed")
+      .map((project) => ({ project, reminder: reminders.get(project.id) }))
+      .filter(
+        (item): item is { project: Project; reminder: NonNullable<ReturnType<typeof getReminder>> } =>
+          item.reminder !== null,
+      ),
+    [projects, reminders],
+  );
 
   const filteredProjects = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -450,14 +470,17 @@ export function ProjectBoard() {
 
   function openSettings() {
     setSettingsDraft(milestoneDefinitions.map((item) => ({ ...item })));
+    setWarningDaysDraft(settings.warningDays ?? 3);
     setSettingsOpen(true);
   }
 
   async function commitSettings() {
     if (settingsDraft.some((item) => !item.name.trim())) return alert("阶段名称不能为空");
+    const safeWarningDays = Math.max(0, Math.min(60, Math.floor(warningDaysDraft) || 0));
     const updated: AppSettings = {
       ...settings,
       milestoneDefinitions: settingsDraft.map((item, index) => ({ ...item, name: item.name.trim(), order: index })),
+      warningDays: safeWarningDays,
       updatedAt: new Date().toISOString(),
     };
     setSaveState("saving");
@@ -624,6 +647,26 @@ export function ProjectBoard() {
         <div className="notice-banner" role="status"><span>{noticeMessage}</span><button onClick={() => setNoticeMessage("")}>关闭</button></div>
       )}
 
+      {dueReminders.length > 0 && !reminderHidden && (
+        <div className="reminder-banner" role="status">
+          <div className="reminder-banner-head">
+            <span className="reminder-icon" aria-hidden>⚠</span>
+            <strong>节点提醒</strong>
+            <span className="reminder-summary">{dueReminders.length} 个项目的检查日期即将到达或已逾期</span>
+            <button className="reminder-dismiss" onClick={() => setReminderHidden(true)}>暂时隐藏</button>
+          </div>
+          <ul className="reminder-list">
+            {dueReminders.map(({ project, reminder }) => (
+              <li key={project.id} className={reminder.level}>
+                <button className="reminder-link" onClick={() => { setSelectedProjectId(project.id); setDetailsOpen(false); }}>{project.projectNo || project.name}</button>
+                <span className="reminder-date">{formatCheckDate(reminder.date)}</span>
+                <span className={`reminder-tag ${reminder.level}`}>{reminderLabel(reminder)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {!settings.lastBackupAt && projects.length > 0 && (
         <div className="backup-banner">
           <div><strong>建议先导出一份 Excel 备份</strong><span>项目、里程碑、设置和图片都会保存在同一个 .xlsx 文件中。</span></div>
@@ -727,12 +770,15 @@ export function ProjectBoard() {
                 <th className="col-progress">完成度</th>
               </tr></thead>
               <tbody>
-                {filteredProjects.map((project) => project.subItems.map((subItem, subIndex) => (
-                  <tr key={subItem.id} className={subIndex === 0 ? "group-start" : "group-continuation"}>
+                {filteredProjects.map((project) => {
+                  const reminder = reminders.get(project.id) ?? null;
+                  return project.subItems.map((subItem, subIndex) => (
+                  <tr key={subItem.id} className={`${subIndex === 0 ? "group-start" : "group-continuation"}${reminder ? ` row-reminder ${reminder.level}` : ""}`}>
                     <td className="sticky-col col-no">{subIndex === 0 ? project.no : ""}</td>
                     <td className="sticky-col col-project">
                       {subIndex === 0 && <>
                         <button className="project-link" onClick={() => setSelectedProjectId(project.id)}>{project.projectNo || project.name}<small>{project.name}</small></button>
+                        {boardView === "active" && reminder && <span className={`reminder-badge ${reminder.level}`} title={`检查日期 ${formatCheckDate(reminder.date)} · ${reminderLabel(reminder)}`}>⚠ {reminderLabel(reminder)}</span>}
                         {boardView === "active" && canMoveToCompleted(project) && <button className="archive-row-action" onClick={() => moveProjectToCompleted(project)}>移入已完成</button>}
                       </>}
                     </td>
@@ -756,7 +802,8 @@ export function ProjectBoard() {
                     })}
                     <td className="col-progress"><strong>{progressPercent(subItem)}%</strong><div className="row-progress"><i style={{ width: `${progressPercent(subItem)}%` }} /></div></td>
                   </tr>
-                )))}
+                  ));
+                })}
               </tbody>
             </table>
           </div>
@@ -783,6 +830,13 @@ export function ProjectBoard() {
                 <label><span>计划出样</span><input value={selectedProject.outputTime} onChange={(event) => updateProjectField(selectedProject.id, "outputTime", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
                 <label><span>出样数量</span><input value={selectedProject.outputQty} onChange={(event) => updateProjectField(selectedProject.id, "outputQty", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
                 <label><span>检查日期</span><input value={selectedProject.cp} onChange={(event) => updateProjectField(selectedProject.id, "cp", event.target.value)} onBlur={() => saveEditedProject(selectedProject.id)} /></label>
+                {(() => {
+                  const parsed = parseCheckDate(selectedProject.cp);
+                  if (!selectedProject.cp) return null;
+                  if (!parsed) return <p className="field-reminder invalid">“{selectedProject.cp}”无法识别为日期，支持 2026.08.12 或 8/11 写法</p>;
+                  const reminder = getReminder(selectedProject.cp, warningDays)!;
+                  return <p className={`field-reminder ${reminder.level}`}>检查日期：{formatCheckDate(parsed)} · <b>{reminderLabel(reminder)}</b></p>;
+                })()}
                 <label className="full"><span>整体状态</span><select value={selectedProject.status} disabled={selectedProject.status === "closed"} onChange={async (event) => {
                   const updated = { ...selectedProject, status: event.target.value as ProjectStatus, updatedAt: new Date().toISOString() };
                   await commitProject(updated);
@@ -827,7 +881,7 @@ export function ProjectBoard() {
       {detailsOpen && <div className="modal-layer"><section className="fullscreen-modal">
         <div className="modal-header"><div><span className="eyebrow">DETAIL VIEW</span><h2>全局项目详情</h2><p>{projects.length} 个主项目 · 点击项目编号进入编辑</p></div><button className="icon-button" onClick={() => setDetailsOpen(false)}>×</button></div>
         <div className="detail-table-wrap"><table className="detail-table"><thead><tr><th>No.</th><th>PM</th><th>项目编号 / 名称</th><th>类别</th><th>需求数量</th><th>计划出样</th><th>出样数量</th><th>详细进展</th><th>负责人</th><th>检查日期</th><th>状态</th><th>图片</th></tr></thead>
-          <tbody>{filteredProjects.map((project) => <tr key={project.id}><td>{project.no}</td><td>{project.pm}</td><td><button className="project-link" onClick={() => { setSelectedProjectId(project.id); setDetailsOpen(false); }}>{project.projectNo}<small>{project.name}</small></button></td><td>{project.category}</td><td>{project.demandQty}</td><td>{project.outputTime}</td><td>{project.outputQty}</td><td className="progress-copy">{project.detailProgress || "—"}</td><td className="dri-copy">{project.dri || "—"}</td><td>{project.cp}</td><td><span className={`status-chip ${project.status}`}>{STATUS_LABELS[project.status]}</span></td><td>{images.filter((image) => image.projectId === project.id).length}</td></tr>)}</tbody>
+          <tbody>{filteredProjects.map((project) => <tr key={project.id}><td>{project.no}</td><td>{project.pm}</td><td><button className="project-link" onClick={() => { setSelectedProjectId(project.id); setDetailsOpen(false); }}>{project.projectNo}<small>{project.name}</small></button></td><td>{project.category}</td><td>{project.demandQty}</td><td>{project.outputTime}</td><td>{project.outputQty}</td><td className="progress-copy">{project.detailProgress || "—"}</td><td className="dri-copy">{project.dri || "—"}</td><td>{project.cp}{(() => { const r = reminders.get(project.id); return r ? <span className={`reminder-dot ${r.level}`} title={reminderLabel(r)}>●</span> : null; })()}</td><td><span className={`status-chip ${project.status}`}>{STATUS_LABELS[project.status]}</span></td><td>{images.filter((image) => image.projectId === project.id).length}</td></tr>)}</tbody>
         </table></div>
         <div className="modal-footer"><button className="button ghost" disabled={busy} onClick={exportExcel}>{busy ? "正在生成…" : "导出 Excel"}</button><button className="button dark" onClick={() => setDetailsOpen(false)}>返回看板</button></div>
       </section></div>}
@@ -844,7 +898,14 @@ export function ProjectBoard() {
 
       {settingsOpen && <div className="modal-layer"><section className="settings-modal">
         <div className="modal-header"><div><span className="eyebrow">SETTINGS</span><h2>15 个阶段设置</h2><p>阶段数量固定；改名或排序不会丢失已有记录。</p></div><button className="icon-button" onClick={() => setSettingsOpen(false)}>×</button></div>
-        <div className="settings-body"><div className="definition-list">{settingsDraft.map((definition, index) => <div className="definition-row" key={definition.id}><span>{String(index + 1).padStart(2, "0")}</span><input value={definition.name} onChange={(event) => setSettingsDraft((current) => current.map((item) => item.id === definition.id ? { ...item, name: event.target.value } : item))} /><div><button disabled={index === 0} onClick={() => moveDefinition(index, -1)}>↑</button><button disabled={index === settingsDraft.length - 1} onClick={() => moveDefinition(index, 1)}>↓</button></div></div>)}</div>
+        <div className="settings-body"><div className="settings-reminder">
+          <h3>节点提醒</h3>
+          <label className="reminder-field">
+            <span>检查日期提前预警天数</span>
+            <input type="number" min={0} max={60} value={warningDaysDraft} onChange={(event) => setWarningDaysDraft(Number(event.target.value))} />
+            <small>在“检查日期”到达前这么多天内，看板行与顶部都会给出预警。默认 3 天。支持的写法：2026.08.12、8/11、8月11日。</small>
+          </label>
+        </div><div className="definition-list">{settingsDraft.map((definition, index) => <div className="definition-row" key={definition.id}><span>{String(index + 1).padStart(2, "0")}</span><input value={definition.name} onChange={(event) => setSettingsDraft((current) => current.map((item) => item.id === definition.id ? { ...item, name: event.target.value } : item))} /><div><button disabled={index === 0} onClick={() => moveDefinition(index, -1)}>↑</button><button disabled={index === settingsDraft.length - 1} onClick={() => moveDefinition(index, 1)}>↓</button></div></div>)}</div>
           <aside className="data-management"><h3>本机数据</h3><dl><div><dt>存储使用</dt><dd>{storageText}</dd></div><div><dt>最近备份</dt><dd>{formatTime(settings.lastBackupAt)}</dd></div><div><dt>项目 / 图片</dt><dd>{projects.length} / {images.length}</dd></div></dl><button className="button ghost full-button" disabled={busy} onClick={exportExcel}>{busy ? "正在生成…" : "导出 Excel 备份"}</button><button className="button danger full-button" onClick={clearLocalData}>清空本机数据</button><p>清空浏览器数据或更换电脑前，请先导出 .xlsx 文件。</p></aside>
         </div><div className="modal-footer"><button className="button ghost" onClick={() => setSettingsOpen(false)}>取消</button><button className="button dark" onClick={commitSettings}>保存设置</button></div>
       </section></div>}
