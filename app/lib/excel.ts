@@ -427,8 +427,10 @@ export async function exportTrackingSheet(settings: AppSettings, projects: Proje
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = `项目进度追踪表-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  document.body.appendChild(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 export async function importExcelBackup(file: File): Promise<PortablePayload> {
