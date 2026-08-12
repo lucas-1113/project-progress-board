@@ -259,7 +259,7 @@ function extractBusinessDri(dri: string): string {
 export async function exportTrackingSheet(settings: AppSettings, projects: Project[], images: ImageRecord[]): Promise<void> {
   const XLSX = await import("xlsx");
   const workbook = XLSX.utils.book_new();
-  const stageDefs = settings.milestoneDefinitions.slice(0, 13);
+  const stageDefs = settings.milestoneDefinitions;
   const total = projects.length;
   const countByStatus = (status: ProjectStatus) => projects.filter((project) => project.status === status).length;
   const closed = countByStatus("closed");
@@ -271,14 +271,24 @@ export async function exportTrackingSheet(settings: AppSettings, projects: Proje
   const isStageDone = (project: Project, milestoneId: string): boolean =>
     project.subItems.some((subItem) => subItem.milestones.some((entry) => entry.milestoneId === milestoneId && entry.state === "done"));
 
-  // ---- Summary sheet: 阶段勾选汇总 ----
+  const stageHeader = (name: string): string => name.replace(/\s\(/, "\n(");
+  const progressBar = (done: number, totalStages: number): string => {
+    const filled = Math.max(0, Math.min(totalStages, done));
+    const empty = totalStages - filled;
+    const pct = totalStages ? Math.round((filled / totalStages) * 100) : 0;
+    return "\u25A0".repeat(filled) + "\u25A1".repeat(empty) + ` ${pct}%`;
+  };
+
+  // ---- Summary sheet: 阶段勾选汇总 + 项目进度 ----
   const summaryRows: CellValue[][] = [];
   summaryRows.push([null, `项目进度追踪表-${monthLabel}`]);
-  summaryRows.push([null, "序号", "项目类别", "项目名称", "业务DRI", "出样月份", ...stageDefs.map((definition) => definition.name)]);
+  summaryRows.push([null, "序号", "项目类别", "项目名称", "业务DRI", "出样月份", ...stageDefs.map((definition) => stageHeader(definition.name)), "项目进度"]);
   for (const project of projects) {
+    const doneCount = stageDefs.filter((definition) => isStageDone(project, definition.id)).length;
     const row: CellValue[] = [
       null, project.no, project.category, project.name, extractBusinessDri(project.dri), project.outputTime,
       ...stageDefs.map((definition) => (isStageDone(project, definition.id) ? "✓" : "")),
+      progressBar(doneCount, stageDefs.length),
     ];
     summaryRows.push(row);
   }
@@ -286,6 +296,7 @@ export async function exportTrackingSheet(settings: AppSettings, projects: Proje
   summarySheet["!cols"] = [
     { wch: 3 }, { wch: 6 }, { wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 10 },
     ...stageDefs.map(() => ({ wch: 12 })),
+    { wch: 22 },
   ];
   const boldRow = (sheet: XLSX.WorkSheet, rowIndex: number, lastColumn: number): void => {
     for (let column = 1; column <= lastColumn; column += 1) {
@@ -293,7 +304,7 @@ export async function exportTrackingSheet(settings: AppSettings, projects: Proje
       if (cell) cell.s = { font: { bold: true } };
     }
   };
-  boldRow(summarySheet, 1, 5 + stageDefs.length);
+  boldRow(summarySheet, 1, 6 + stageDefs.length);
 
   // ---- Detail sheet: 项目明细 + 统计区 ----
   const detailRows: CellValue[][] = [];
