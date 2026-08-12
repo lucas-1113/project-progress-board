@@ -249,6 +249,83 @@ export async function exportExcelBackup(settings: AppSettings, projects: Project
   XLSX.writeFileXLSX(workbook, `项目进度看板备份-${exportedAt.slice(0, 10)}.xlsx`);
 }
 
+function extractBusinessDri(dri: string): string {
+  const lines = dri.split(/[\n;；]/).map((line) => line.trim()).filter(Boolean);
+  const found = lines.find((line) => /业务/.test(line));
+  const target = found ?? lines[0] ?? "";
+  return target.replace(/^[\s\S]*?[:：]/, "").trim();
+}
+
+export async function exportTrackingSheet(settings: AppSettings, projects: Project[], images: ImageRecord[]): Promise<void> {
+  const XLSX = await import("xlsx");
+  const workbook = XLSX.utils.book_new();
+  const stageDefs = settings.milestoneDefinitions.slice(0, 13);
+  const total = projects.length;
+  const countByStatus = (status: ProjectStatus) => projects.filter((project) => project.status === status).length;
+  const closed = countByStatus("closed");
+  const ongoing = countByStatus("ongoing");
+  const risk = countByStatus("risk");
+  const rate = (value: number) => (total ? Number((value / total).toFixed(4)) : 0);
+  const monthLabel = `${new Date().getMonth() + 1}月`;
+
+  const isStageDone = (project: Project, milestoneId: string): boolean =>
+    project.subItems.some((subItem) => subItem.milestones.some((entry) => entry.milestoneId === milestoneId && entry.state === "done"));
+
+  // ---- Summary sheet: 阶段勾选汇总 ----
+  const summaryRows: CellValue[][] = [];
+  summaryRows.push([null, `项目进度追踪表-${monthLabel}`]);
+  summaryRows.push([null, "序号", "项目类别", "项目名称", "业务DRI", "出样月份", ...stageDefs.map((definition) => definition.name)]);
+  for (const project of projects) {
+    const row: CellValue[] = [
+      null, project.no, project.category, project.name, extractBusinessDri(project.dri), project.outputTime,
+      ...stageDefs.map((definition) => (isStageDone(project, definition.id) ? "✓" : "")),
+    ];
+    summaryRows.push(row);
+  }
+  const summarySheet = XLSX.utils.aoa_to_sheet(summaryRows);
+  summarySheet["!cols"] = [
+    { wch: 3 }, { wch: 6 }, { wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 10 },
+    ...stageDefs.map(() => ({ wch: 12 })),
+  ];
+  const boldRow = (sheet: XLSX.WorkSheet, rowIndex: number, lastColumn: number): void => {
+    for (let column = 1; column <= lastColumn; column += 1) {
+      const cell = sheet[XLSX.utils.encode_cell({ r: rowIndex, c: column })];
+      if (cell) cell.s = { font: { bold: true } };
+    }
+  };
+  boldRow(summarySheet, 1, 5 + stageDefs.length);
+
+  // ---- Detail sheet: 项目明细 + 统计区 ----
+  const detailRows: CellValue[][] = [];
+  detailRows.push([null]);
+  detailRows.push([null, "Define", null, null, "Category", "Q'ty", "Rate", "Remark"]);
+  detailRows.push([null, "已结案", null, null, "Closed", closed, rate(closed), ""]);
+  detailRows.push([null, "计划内", null, null, "Ongoing", ongoing, rate(ongoing), ""]);
+  detailRows.push([null, "项目存在异常/延期风险", null, null, "Risk", risk, rate(risk), ""]);
+  detailRows.push([null, "Total", null, null, "", total, "", ""]);
+  detailRows.push([]);
+  detailRows.push([]);
+  detailRows.push([null, "No.", "PM", "Project No", "Project Name", "Category", "Demand Q'ty", "Output Time", "Output Q'ty", "Progress", "DRI", "CP", "Status", "Picture"]);
+  for (const project of projects) {
+    const pictureCount = images.filter((image) => image.projectId === project.id).length;
+    detailRows.push([
+      null, project.no, project.pm, project.projectNo, project.name, project.category,
+      project.demandQty, project.outputTime, project.outputQty, project.detailProgress,
+      project.dri, project.cp, STATUS_LABELS[project.status], pictureCount,
+    ]);
+  }
+  const detailSheet = XLSX.utils.aoa_to_sheet(detailRows);
+  detailSheet["!cols"] = [
+    { wch: 3 }, { wch: 5 }, { wch: 10 }, { wch: 22 }, { wch: 34 }, { wch: 12 }, { wch: 12 },
+    { wch: 12 }, { wch: 10 }, { wch: 50 }, { wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 8 },
+  ];
+  boldRow(detailSheet, 8, 13);
+
+  XLSX.utils.book_append_sheet(workbook, summarySheet, "Summary");
+  XLSX.utils.book_append_sheet(workbook, detailSheet, "Detail");
+  XLSX.writeFileXLSX(workbook, `项目进度追踪表-${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
 export async function importExcelBackup(file: File): Promise<PortablePayload> {
   const XLSX = await import("xlsx");
   let workbook;

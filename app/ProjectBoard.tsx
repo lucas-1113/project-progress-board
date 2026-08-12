@@ -24,7 +24,7 @@ import {
   saveProject,
   saveSettings,
 } from "./lib/db";
-import { exportExcelBackup, importExcelBackup } from "./lib/excel";
+import { exportExcelBackup, importExcelBackup, exportTrackingSheet } from "./lib/excel";
 import { importLegacyXls } from "./lib/legacy-xls";
 import { formatCheckDate, getReminder, parseCheckDate, reminderLabel } from "./lib/reminder";
 
@@ -524,6 +524,22 @@ export function ProjectBoard() {
     }
   }
 
+  async function exportTracking() {
+    if (busy) return;
+    setBusy(true);
+    setSaveState("saving");
+    try {
+      await exportTrackingSheet(settings, projects, images);
+      setSaveState("saved");
+      setNoticeMessage("已导出「项目进度追踪表」（Summary 阶段汇总 + Detail 明细，与你的模板一致）。");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "追踪表导出失败");
+      setSaveState("error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function importExcel(file: File) {
     if (busy) return;
     setBusy(true);
@@ -716,7 +732,8 @@ export function ProjectBoard() {
         <div className="toolbar-spacer" />
         <button className="button ghost" disabled={busy} onClick={() => legacyImportInputRef.current?.click()}>导入旧版 .xls</button>
         <button className="button ghost" disabled={busy} onClick={() => importInputRef.current?.click()}>导入 Excel 备份</button>
-        <button className="button ghost" disabled={busy} onClick={exportExcel}>{busy ? "正在处理…" : "导出 Excel"}</button>
+        <button className="button ghost" disabled={busy} onClick={exportExcel}>{busy ? "正在处理…" : "导出 Excel 备份"}</button>
+        <button className="button ghost" disabled={busy} onClick={exportTracking}>{busy ? "正在处理…" : "导出追踪表"}</button>
         <button className="button dark" onClick={addProject}>＋ 新建项目</button>
         <input ref={importInputRef} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={(event) => {
           const file = event.target.files?.[0] ?? null;
