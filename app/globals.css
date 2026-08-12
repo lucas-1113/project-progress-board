@@ -129,6 +129,15 @@ button.stat-card { cursor: pointer; }.stat-card.active { outline: 2px solid var(
 .search-box { display: flex; align-items: center; width: min(300px, 27vw); padding: 0 10px; }
 .search-box span { margin-right: 7px; color: var(--muted); font-size: 20px; transform: rotate(-15deg); }.search-box input { width: 100%; border: 0; outline: 0; background: transparent; font-size: 12px; }
 .result-count { color: var(--muted); font-size: 11px; }.toolbar-spacer { flex: 1; }
+
+.backup-dropdown { position: relative; display: inline-flex; }
+.backup-dropdown .caret { font-size: 9px; margin-left: 2px; opacity: 0.7; }
+.dropdown-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 50; min-width: 158px; padding: 5px; border: 1px solid var(--line-strong); border-radius: 9px; background: white; box-shadow: 0 10px 28px rgba(20,25,30,.16); display: flex; flex-direction: column; gap: 3px; }
+.dropdown-item { width: 100%; text-align: left; padding: 9px 11px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; font-size: 12px; font-weight: 600; color: #30353c; transition: 120ms ease; }
+.dropdown-item:hover:not(:disabled) { background: #f1f3f5; }
+.dropdown-item:disabled { opacity: 0.55; cursor: not-allowed; }
+.compact-mode .dropdown-menu { min-width: 140px; }
+.compact-mode .dropdown-item { padding: 7px 9px; font-size: 11px; }
 .compact-fit-note { padding: 4px 7px; border-radius: 4px; color: #176245; background: #e0f1ea; font-size: 10px; font-weight: 700; white-space: nowrap; }
 
 .board-panel { min-height: 420px; border: 1px solid var(--line-strong); background: white; box-shadow: 0 3px 14px rgba(20,25,30,.05); }

@@ -135,9 +135,22 @@ export function ProjectBoard() {
   const [previewImageId, setPreviewImageId] = useState<string | null>(null);
   const [compactMode, setCompactMode] = useState(() => typeof window !== "undefined" && localStorage.getItem("project-board-compact-mode") === "1");
   const [compactMetrics, setCompactMetrics] = useState({ rowHeight: 30, headerHeight: 50, boardHeight: 700 });
+  const [backupMenuOpen, setBackupMenuOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const legacyImportInputRef = useRef<HTMLInputElement>(null);
+  const backupMenuRef = useRef<HTMLDivElement>(null);
   const boardPanelRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!backupMenuOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (backupMenuRef.current && !backupMenuRef.current.contains(event.target as Node)) {
+        setBackupMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [backupMenuOpen]);
 
   useEffect(() => {
     loadAppData()
@@ -730,9 +743,18 @@ export function ProjectBoard() {
         <span className="result-count">显示 {filteredProjects.length} / {currentBoardProjects.length} 个主项目</span>
         {compactMode && <span className="compact-fit-note">已自动适配 {visibleRowCount} 行</span>}
         <div className="toolbar-spacer" />
-        <button className="button ghost" disabled={busy} onClick={() => legacyImportInputRef.current?.click()}>导入旧版 .xls</button>
-        <button className="button ghost" disabled={busy} onClick={() => importInputRef.current?.click()}>导入 Excel 备份</button>
-        <button className="button ghost" disabled={busy} onClick={exportExcel}>{busy ? "正在处理…" : "导出 Excel 备份"}</button>
+        <div className="backup-dropdown" ref={backupMenuRef}>
+          <button className="button ghost" disabled={busy} aria-haspopup="true" aria-expanded={backupMenuOpen} onClick={() => setBackupMenuOpen((value) => !value)}>
+            备份与恢复 <span className="caret">▾</span>
+          </button>
+          {backupMenuOpen && (
+            <div className="dropdown-menu" role="menu">
+              <button className="dropdown-item" disabled={busy} onClick={() => { setBackupMenuOpen(false); legacyImportInputRef.current?.click(); }}>导入旧版 .xls</button>
+              <button className="dropdown-item" disabled={busy} onClick={() => { setBackupMenuOpen(false); importInputRef.current?.click(); }}>导入 Excel 备份</button>
+              <button className="dropdown-item" disabled={busy} onClick={() => { setBackupMenuOpen(false); exportExcel(); }}>{busy ? "正在处理…" : "导出 Excel 备份"}</button>
+            </div>
+          )}
+        </div>
         <button className="button ghost" disabled={busy} onClick={exportTracking}>{busy ? "正在处理…" : "导出追踪表"}</button>
         <button className="button dark" onClick={addProject}>＋ 新建项目</button>
         <input ref={importInputRef} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={(event) => {
@@ -760,7 +782,19 @@ export function ProjectBoard() {
           <div className="empty-state">
             <div className="empty-icon">15</div><h2>从一份项目开始</h2>
             <p>新建空白项目，导入旧版研发部 .xls 表格，或恢复项目看板 Excel 备份。</p>
-            <div><button className="button dark" onClick={addProject}>新建项目</button><button className="button ghost" onClick={() => legacyImportInputRef.current?.click()}>导入旧版 .xls</button><button className="button ghost" onClick={() => importInputRef.current?.click()}>导入 Excel 备份</button></div>
+            <div>
+              <button className="button dark" onClick={addProject}>新建项目</button>
+              <div className="backup-dropdown" ref={backupMenuRef}>
+                <button className="button ghost" disabled={busy} aria-haspopup="true" aria-expanded={backupMenuOpen} onClick={() => setBackupMenuOpen((value) => !value)}>备份与恢复 <span className="caret">▾</span></button>
+                {backupMenuOpen && (
+                  <div className="dropdown-menu" role="menu">
+                    <button className="dropdown-item" disabled={busy} onClick={() => { setBackupMenuOpen(false); legacyImportInputRef.current?.click(); }}>导入旧版 .xls</button>
+                    <button className="dropdown-item" disabled={busy} onClick={() => { setBackupMenuOpen(false); importInputRef.current?.click(); }}>导入 Excel 备份</button>
+                    <button className="dropdown-item" disabled={busy} onClick={() => { setBackupMenuOpen(false); exportExcel(); }}>{busy ? "正在处理…" : "导出 Excel 备份"}</button>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         ) : filteredProjects.length === 0 ? (
           <div className="empty-state board-empty">
