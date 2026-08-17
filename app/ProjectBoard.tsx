@@ -885,7 +885,8 @@ export function ProjectBoard() {
                   const parsed = parseCheckDate(selectedProject.cp);
                   if (!selectedProject.cp) return null;
                   if (!parsed) return <p className="field-reminder invalid">“{selectedProject.cp}”无法识别为日期，支持 2026.08.12 或 8/11 写法</p>;
-                  const reminder = getReminder(selectedProject.cp, warningDays)!;
+                  const reminder = getReminder(selectedProject.cp, warningDays);
+                  if (!reminder) return <p className="field-reminder">检查日期：{formatCheckDate(parsed)} · 正常</p>;
                   return <p className={`field-reminder ${reminder.level}`}>检查日期：{formatCheckDate(parsed)} · <b>{reminderLabel(reminder)}</b></p>;
                 })()}
                 <label className="full"><span>整体状态</span><select value={selectedProject.status} disabled={selectedProject.status === "closed"} onChange={async (event) => {
