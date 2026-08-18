@@ -397,29 +397,33 @@ export async function exportTrackingSheet(settings: AppSettings, projects: Proje
     row.getCell(10).alignment = { wrapText: true, vertical: "top" };
     row.height = 36;
 
-    const projectImageList = projectImages.get(project.id) ?? [];
-    const primaryImage = projectImageList.sort((a, b) => a.order - b.order)[0];
-    if (primaryImage) {
+    const projectImageList = [...(projectImages.get(project.id) ?? [])].sort((a, b) => a.order - b.order);
+    let maxImageHeight = 36;
+    for (const [index, image] of projectImageList.entries()) {
       try {
-        const { base64, width, height } = await blobToPngBase64(primaryImage.blob);
+        const { base64, width, height } = await blobToPngBase64(image.blob);
         const fitted = fitTrackingImage(width, height);
         const imageId = workbook.addImage({ base64, extension: "png" });
         detailSheet.addImage(imageId, {
-          tl: { col: pictureColumnIndex, row: row.number - 1 },
+          tl: { col: pictureColumnIndex + index, row: row.number - 1 },
           ext: { width: fitted.width, height: fitted.height },
         });
-        row.height = Math.max(36, fitted.height + TRACKING_IMAGE_PADDING);
-        row.getCell(pictureColumnIndex + 1).value = "";
+        maxImageHeight = Math.max(maxImageHeight, fitted.height + TRACKING_IMAGE_PADDING);
       } catch {
-        row.getCell(pictureColumnIndex + 1).value = "图片加载失败";
+        // 单张图片加载失败时跳过，不影响其他图片
       }
     }
+    if (projectImageList.length > 0) row.height = maxImageHeight;
   }
 
   detailSheet.columns = [
     { width: 3 }, { width: 5 }, { width: 10 }, { width: 22 }, { width: 34 }, { width: 12 },
     { width: 12 }, { width: 12 }, { width: 10 }, { width: 50 }, { width: 24 }, { width: 12 }, { width: 12 }, { width: 24 },
   ];
+  const imageColumnCount = Math.max(1, ...[...projectImages.values()].map((list) => list.length));
+  for (let imageIndex = 1; imageIndex < imageColumnCount; imageIndex += 1) {
+    detailSheet.getColumn(pictureColumnIndex + 1 + imageIndex).width = 24;
+  }
 
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
