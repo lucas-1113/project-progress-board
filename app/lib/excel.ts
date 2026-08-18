@@ -364,12 +364,23 @@ export async function exportTrackingSheet(
   // ---- Detail sheet ----
   const detailSheet = workbook.addWorksheet("Detail");
   detailSheet.addRow([]);
+
+  const projectImages = new Map<string, ImageRecord[]>();
+  for (const image of images) {
+    const list = projectImages.get(image.projectId) ?? [];
+    list.push(image);
+    projectImages.set(image.projectId, list);
+  }
+
   const statsHeader = detailSheet.addRow([null, "Define", null, null, "Category", "Q'ty", "Rate", "Remark"]);
   statsHeader.eachCell((cell) => { cell.font = { bold: true }; });
   detailSheet.addRow([null, "已结案", null, null, "Closed", closed, rate(closed), ""]);
   detailSheet.addRow([null, "计划内", null, null, "Ongoing", ongoing, rate(ongoing), ""]);
   detailSheet.addRow([null, "项目存在异常/延期风险", null, null, "Risk", risk, rate(risk), ""]);
   detailSheet.addRow([null, "Total", null, null, "", total, "", ""]);
+  const imagesTotal = images.length;
+  const projectsWithImages = projectImages.size;
+  detailSheet.addRow([null, "图片统计", null, null, `共 ${imagesTotal} 张 / ${projectsWithImages} 个项目含图`, "", "", ""]);
   detailSheet.addRow([]);
   detailSheet.addRow([]);
 
@@ -382,13 +393,6 @@ export async function exportTrackingSheet(
     cell.alignment = { horizontal: "center", vertical: "center", wrapText: true };
   });
   detailHeader.height = 36;
-
-  const projectImages = new Map<string, ImageRecord[]>();
-  for (const image of images) {
-    const list = projectImages.get(image.projectId) ?? [];
-    list.push(image);
-    projectImages.set(image.projectId, list);
-  }
 
   const pictureColumnIndex = 13; // N column, 0-indexed
   let totalImageCount = 0;

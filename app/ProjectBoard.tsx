@@ -550,6 +550,10 @@ export function ProjectBoard() {
         if (stats.failedCount > 0) parts.push(`（${stats.failedCount} 张失败）`);
       }
       setNoticeMessage(parts.join("") + "。");
+      if (stats.imageCount === 0) {
+        // eslint-disable-next-line no-alert
+        alert("本机未检测到任何项目图片数据，导出的追踪表将不含图片。\n请确认已在项目详情里上传过图片（且这些图片已保存在本机浏览器）。\n提示：数据按浏览器+网址隔离，换浏览器或清缓存后需重新上传或从「备份与恢复」导入。");
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "追踪表导出失败");
       setSaveState("error");
