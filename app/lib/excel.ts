@@ -72,19 +72,8 @@ function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
-function setSheetLayout(sheet: { [key: string]: unknown }, widths: number[], rowCount: number, columnCount: number): void {
+function setSheetLayout(sheet: { [key: string]: unknown }, widths: number[]): void {
   sheet["!cols"] = widths.map((wch) => ({ wch }));
-}
-
-function columnName(columnCount: number): string {
-  let value = columnCount;
-  let result = "";
-  while (value > 0) {
-    value -= 1;
-    result = String.fromCharCode(65 + (value % 26)) + result;
-    value = Math.floor(value / 26);
-  }
-  return result;
 }
 
 function requiredSheet(workbook: { Sheets: Record<string, unknown> }, name: string): unknown {
@@ -157,7 +146,7 @@ export async function exportExcelBackup(settings: AppSettings, projects: Project
     "项目ID", "序号", "PM", "项目编号", "项目名称", "类别", "需求数量", "计划出样", "出样数量", "详细进展",
     "负责人", "检查日期", "状态", "创建时间", "更新时间", "子项数量", "图片数量",
   ] });
-  setSheetLayout(projectSheet, [38, 8, 12, 22, 28, 18, 12, 14, 12, 48, 24, 14, 12, 24, 24, 10, 10], projectRows.length, 17);
+  setSheetLayout(projectSheet, [38, 8, 12, 22, 28, 18, 12, 14, 12, 48, 24, 14, 12, 24, 24, 10, 10]);
   applyDateColumns(projectSheet, [13, 14]);
 
   const milestoneRows: Row[] = [];
@@ -190,14 +179,14 @@ export async function exportExcelBackup(settings: AppSettings, projects: Project
     "项目ID", "项目序号", "项目编号", "子项ID", "子项名称", "子项类别", "业务DRI", "出样月份", "子项创建时间",
     "子项更新时间", "阶段ID", "阶段序号", "阶段名称", "状态", "备注", "强调色", "更新时间",
   ] });
-  setSheetLayout(milestoneSheet, [38, 10, 22, 38, 28, 18, 16, 14, 24, 24, 12, 10, 28, 12, 42, 12, 24], milestoneRows.length, 17);
+  setSheetLayout(milestoneSheet, [38, 10, 22, 38, 28, 18, 16, 14, 24, 24, 12, 10, 28, 12, 42, 12, 24]);
   applyDateColumns(milestoneSheet, [8, 9, 16]);
 
   const definitionRows = [...settings.milestoneDefinitions]
     .sort((a, b) => a.order - b.order)
     .map((definition) => ({ 阶段ID: definition.id, 阶段名称: definition.name, 显示顺序: definition.order + 1 }));
   const settingsSheet = XLSX.utils.json_to_sheet(definitionRows, { header: ["阶段ID", "阶段名称", "显示顺序"] });
-  setSheetLayout(settingsSheet, [14, 32, 12], definitionRows.length, 3);
+  setSheetLayout(settingsSheet, [14, 32, 12]);
 
   const imageRows: Row[] = [];
   for (const image of images) {
@@ -218,7 +207,7 @@ export async function exportExcelBackup(settings: AppSettings, projects: Project
   const imageSheet = XLSX.utils.json_to_sheet(imageRows, { header: [
     "图片ID", "项目ID", "文件名", "类型", "顺序", "创建时间", "分片序号", "分片总数", "Base64数据",
   ] });
-  setSheetLayout(imageSheet, [38, 38, 28, 18, 8, 24, 10, 10, 18], imageRows.length, 9);
+  setSheetLayout(imageSheet, [38, 38, 28, 18, 8, 24, 10, 10, 18]);
   applyDateColumns(imageSheet, [5]);
 
   const infoRows: Array<[string, string | number]> = [
@@ -424,7 +413,6 @@ export async function exportTrackingSheet(
         failedImageCount += 1;
         const errorText = error instanceof Error ? error.message : "图片加载失败";
         row.getCell(pictureColumnIndex + 1 + index).value = `图片加载失败: ${errorText}`;
-        // eslint-disable-next-line no-console
         console.error(`追踪表图片导出失败 (project=${project.id}, image=${image.id}):`, error);
       }
     }
@@ -451,6 +439,90 @@ export async function exportTrackingSheet(
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
   return { projectCount: projects.length, imageCount: totalImageCount, failedCount: failedImageCount };
+}
+
+export async function exportWorkLog(projects: Project[]): Promise<{ projectCount: number }> {
+  const ExcelJS = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("工作日志");
+
+  const now = new Date();
+  const monthLabel = `${now.getMonth() + 1}月`;
+  const blackBorder = {
+    top: { style: "medium", color: { argb: "FF000000" } },
+    bottom: { style: "medium", color: { argb: "FF000000" } },
+    left: { style: "medium", color: { argb: "FF000000" } },
+    right: { style: "medium", color: { argb: "FF000000" } },
+  };
+
+  const titleRow = sheet.addRow([`研发部工作日志表（${monthLabel}）`]);
+  titleRow.getCell(1).font = { bold: true, size: 14 };
+  titleRow.getCell(1).alignment = { horizontal: "center", vertical: "middle" };
+  titleRow.height = 28;
+  titleRow.eachCell((cell) => {
+    cell.border = blackBorder;
+  });
+  sheet.mergeCells(1, 1, 1, 6);
+
+  const subtitleRow = sheet.addRow(["职位：项目工程师-严心好"]);
+  subtitleRow.getCell(1).font = { bold: true, size: 11 };
+  subtitleRow.getCell(1).alignment = { horizontal: "center", vertical: "middle" };
+  subtitleRow.height = 24;
+  subtitleRow.eachCell((cell) => {
+    cell.border = blackBorder;
+  });
+  sheet.mergeCells(2, 1, 2, 6);
+
+  const headers = ["日期", "项目名称", "当日工作内容", "完成情况（项目进度描述）", "项目问题描述及解决方法", "工时（0.0小时）"];
+  const headerRow = sheet.addRow(headers);
+  headerRow.eachCell((cell) => {
+    cell.font = { bold: true };
+    cell.alignment = { horizontal: "center", vertical: "center", wrapText: true };
+    cell.border = blackBorder;
+  });
+  headerRow.height = 36;
+
+  for (const project of projects) {
+    const row = sheet.addRow([
+      now,
+      project.projectNo,
+      project.detailProgress || "",
+      STATUS_LABELS[project.status],
+      "",
+      "",
+    ]);
+    row.eachCell((cell) => {
+      cell.alignment = { vertical: "center", wrapText: true };
+      cell.border = blackBorder;
+    });
+    row.getCell(1).numFmt = "yyyy/m/d";
+    row.getCell(1).alignment = { horizontal: "center", vertical: "center" };
+    row.getCell(2).alignment = { horizontal: "center", vertical: "center" };
+    row.getCell(4).alignment = { horizontal: "center", vertical: "center" };
+    row.height = 36;
+  }
+
+  sheet.columns = [
+    { width: 14 },
+    { width: 24 },
+    { width: 80 },
+    { width: 22 },
+    { width: 60 },
+    { width: 14 },
+  ];
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `研发部工作日志-${now.toISOString().slice(0, 10)}.xlsx`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+
+  return { projectCount: projects.length };
 }
 
 export async function importExcelBackup(file: File): Promise<PortablePayload> {

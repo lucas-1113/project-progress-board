@@ -24,7 +24,7 @@ import {
   saveProject,
   saveSettings,
 } from "./lib/db";
-import { exportExcelBackup, importExcelBackup, exportTrackingSheet } from "./lib/excel";
+import { exportExcelBackup, importExcelBackup, exportTrackingSheet, exportWorkLog } from "./lib/excel";
 import { importLegacyXls } from "./lib/legacy-xls";
 import { formatCheckDate, getReminder, parseCheckDate, reminderLabel } from "./lib/reminder";
 
@@ -136,9 +136,11 @@ export function ProjectBoard() {
   const [compactMode, setCompactMode] = useState(() => typeof window !== "undefined" && localStorage.getItem("project-board-compact-mode") === "1");
   const [compactMetrics, setCompactMetrics] = useState({ rowHeight: 30, headerHeight: 50, boardHeight: 700 });
   const [backupMenuOpen, setBackupMenuOpen] = useState(false);
+  const [reportMenuOpen, setReportMenuOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const legacyImportInputRef = useRef<HTMLInputElement>(null);
   const backupMenuRef = useRef<HTMLDivElement>(null);
+  const reportMenuRef = useRef<HTMLDivElement>(null);
   const boardPanelRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -151,6 +153,17 @@ export function ProjectBoard() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [backupMenuOpen]);
+
+  useEffect(() => {
+    if (!reportMenuOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (reportMenuRef.current && !reportMenuRef.current.contains(event.target as Node)) {
+        setReportMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [reportMenuOpen]);
 
   useEffect(() => {
     loadAppData()
@@ -551,11 +564,26 @@ export function ProjectBoard() {
       }
       setNoticeMessage(parts.join("") + "。");
       if (stats.imageCount === 0) {
-        // eslint-disable-next-line no-alert
         alert("本机未检测到任何项目图片数据，导出的追踪表将不含图片。\n请确认已在项目详情里上传过图片（且这些图片已保存在本机浏览器）。\n提示：数据按浏览器+网址隔离，换浏览器或清缓存后需重新上传或从「备份与恢复」导入。");
       }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "追踪表导出失败");
+      setSaveState("error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportDailyLog() {
+    if (busy) return;
+    setBusy(true);
+    setSaveState("saving");
+    try {
+      const stats = await exportWorkLog(projects);
+      setSaveState("saved");
+      setNoticeMessage(`已导出「研发部工作日志」：${stats.projectCount} 个项目。日期、项目名称、工作内容、完成情况已填充，问题与工时空着。`);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "工作日志导出失败");
       setSaveState("error");
     } finally {
       setBusy(false);
@@ -764,7 +792,17 @@ export function ProjectBoard() {
             </div>
           )}
         </div>
-        <button className="button ghost" disabled={busy} onClick={exportTracking}>{busy ? "正在处理…" : "导出追踪表"}</button>
+        <div className="backup-dropdown" ref={reportMenuRef}>
+          <button className="button ghost" disabled={busy} aria-haspopup="true" aria-expanded={reportMenuOpen} onClick={() => setReportMenuOpen((value) => !value)}>
+            导出报表 <span className="caret">▾</span>
+          </button>
+          {reportMenuOpen && (
+            <div className="dropdown-menu" role="menu">
+              <button className="dropdown-item" disabled={busy} onClick={() => { setReportMenuOpen(false); exportTracking(); }}>{busy ? "正在处理…" : "项目进度追踪表"}</button>
+              <button className="dropdown-item" disabled={busy} onClick={() => { setReportMenuOpen(false); exportDailyLog(); }}>{busy ? "正在处理…" : "研发部工作日志"}</button>
+            </div>
+          )}
+        </div>
         <button className="button dark" onClick={addProject}>＋ 新建项目</button>
         <input ref={importInputRef} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={(event) => {
           const file = event.target.files?.[0] ?? null;
