@@ -327,7 +327,7 @@ export async function exportTrackingSheet(settings: AppSettings, projects: Proje
   titleRow.height = 28;
 
   const summaryHeader = summarySheet.addRow([
-    null, "序号", "项目类别", "项目名称", "业务DRI", "出样月份",
+    null, "序号", "项目类别", "项目编号", "业务DRI", "出样月份",
     ...stageDefs.map((definition) => stageHeader(definition.name)),
     "项目进度",
   ]);
@@ -339,7 +339,7 @@ export async function exportTrackingSheet(settings: AppSettings, projects: Proje
   for (const project of projects) {
     const doneCount = stageDefs.filter((definition) => isStageDone(project, definition.id)).length;
     const row = summarySheet.addRow([
-      null, project.no, project.category, project.name, extractBusinessDri(project.dri), project.outputTime,
+      null, project.no, project.category, project.projectNo, extractBusinessDri(project.dri), project.outputTime,
       ...stageDefs.map((definition) => (isStageDone(project, definition.id) ? "✓" : "")),
       progressBar(doneCount, stageDefs.length),
     ]);
