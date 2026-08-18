@@ -542,9 +542,14 @@ export function ProjectBoard() {
     setBusy(true);
     setSaveState("saving");
     try {
-      await exportTrackingSheet(settings, projects, images);
+      const stats = await exportTrackingSheet(settings, projects, images);
       setSaveState("saved");
-      setNoticeMessage("已导出「项目进度追踪表」（Summary 阶段汇总 + Detail 明细，与你的模板一致）。");
+      const parts = [`已导出「项目进度追踪表」：${stats.projectCount} 个项目`];
+      if (stats.imageCount > 0) {
+        parts.push(`，嵌入 ${stats.imageCount} 张图片`);
+        if (stats.failedCount > 0) parts.push(`（${stats.failedCount} 张失败）`);
+      }
+      setNoticeMessage(parts.join("") + "。");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "追踪表导出失败");
       setSaveState("error");

@@ -294,7 +294,11 @@ function fitTrackingImage(width: number, height: number): { width: number; heigh
   return { width: Math.max(1, Math.round(width * ratio)), height: Math.max(1, Math.round(height * ratio)) };
 }
 
-export async function exportTrackingSheet(settings: AppSettings, projects: Project[], images: ImageRecord[]): Promise<void> {
+export async function exportTrackingSheet(
+  settings: AppSettings,
+  projects: Project[],
+  images: ImageRecord[],
+): Promise<{ projectCount: number; imageCount: number; failedCount: number }> {
   const ExcelJS = await import("exceljs");
   const workbook = new ExcelJS.Workbook();
   const stageDefs = settings.milestoneDefinitions;
@@ -387,6 +391,8 @@ export async function exportTrackingSheet(settings: AppSettings, projects: Proje
   }
 
   const pictureColumnIndex = 13; // N column, 0-indexed
+  let totalImageCount = 0;
+  let failedImageCount = 0;
   for (const project of projects) {
     const progressText = project.detailProgress || "";
     const row = detailSheet.addRow([
@@ -400,6 +406,7 @@ export async function exportTrackingSheet(settings: AppSettings, projects: Proje
     const projectImageList = [...(projectImages.get(project.id) ?? [])].sort((a, b) => a.order - b.order);
     let maxImageHeight = 36;
     for (const [index, image] of projectImageList.entries()) {
+      totalImageCount += 1;
       try {
         const { base64, width, height } = await blobToPngBase64(image.blob);
         const fitted = fitTrackingImage(width, height);
@@ -409,8 +416,12 @@ export async function exportTrackingSheet(settings: AppSettings, projects: Proje
           ext: { width: fitted.width, height: fitted.height },
         });
         maxImageHeight = Math.max(maxImageHeight, fitted.height + TRACKING_IMAGE_PADDING);
-      } catch {
-        // 单张图片加载失败时跳过，不影响其他图片
+      } catch (error) {
+        failedImageCount += 1;
+        const errorText = error instanceof Error ? error.message : "图片加载失败";
+        row.getCell(pictureColumnIndex + 1 + index).value = `图片加载失败: ${errorText}`;
+        // eslint-disable-next-line no-console
+        console.error(`追踪表图片导出失败 (project=${project.id}, image=${image.id}):`, error);
       }
     }
     if (projectImageList.length > 0) row.height = maxImageHeight;
@@ -435,6 +446,7 @@ export async function exportTrackingSheet(settings: AppSettings, projects: Proje
   anchor.click();
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
+  return { projectCount: projects.length, imageCount: totalImageCount, failedCount: failedImageCount };
 }
 
 export async function importExcelBackup(file: File): Promise<PortablePayload> {
