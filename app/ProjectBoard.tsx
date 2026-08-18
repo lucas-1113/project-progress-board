@@ -136,11 +136,9 @@ export function ProjectBoard() {
   const [compactMode, setCompactMode] = useState(() => typeof window !== "undefined" && localStorage.getItem("project-board-compact-mode") === "1");
   const [compactMetrics, setCompactMetrics] = useState({ rowHeight: 30, headerHeight: 50, boardHeight: 700 });
   const [backupMenuOpen, setBackupMenuOpen] = useState(false);
-  const [reportMenuOpen, setReportMenuOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const legacyImportInputRef = useRef<HTMLInputElement>(null);
   const backupMenuRef = useRef<HTMLDivElement>(null);
-  const reportMenuRef = useRef<HTMLDivElement>(null);
   const boardPanelRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -153,17 +151,6 @@ export function ProjectBoard() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [backupMenuOpen]);
-
-  useEffect(() => {
-    if (!reportMenuOpen) return;
-    const handlePointerDown = (event: MouseEvent) => {
-      if (reportMenuRef.current && !reportMenuRef.current.contains(event.target as Node)) {
-        setReportMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handlePointerDown);
-    return () => document.removeEventListener("mousedown", handlePointerDown);
-  }, [reportMenuOpen]);
 
   useEffect(() => {
     loadAppData()
@@ -792,17 +779,8 @@ export function ProjectBoard() {
             </div>
           )}
         </div>
-        <div className="backup-dropdown" ref={reportMenuRef}>
-          <button className="button ghost" disabled={busy} aria-haspopup="true" aria-expanded={reportMenuOpen} onClick={() => setReportMenuOpen((value) => !value)}>
-            导出报表 <span className="caret">▾</span>
-          </button>
-          {reportMenuOpen && (
-            <div className="dropdown-menu" role="menu">
-              <button className="dropdown-item" disabled={busy} onClick={() => { setReportMenuOpen(false); exportTracking(); }}>{busy ? "正在处理…" : "项目进度追踪表"}</button>
-              <button className="dropdown-item" disabled={busy} onClick={() => { setReportMenuOpen(false); exportDailyLog(); }}>{busy ? "正在处理…" : "研发部工作日志"}</button>
-            </div>
-          )}
-        </div>
+        <button className="button ghost" disabled={busy} onClick={exportTracking}>{busy ? "正在处理…" : "导出追踪表"}</button>
+        <button className="button ghost" disabled={busy} onClick={exportDailyLog}>{busy ? "正在处理…" : "导出工作日志"}</button>
         <button className="button dark" onClick={addProject}>＋ 新建项目</button>
         <input ref={importInputRef} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={(event) => {
           const file = event.target.files?.[0] ?? null;
