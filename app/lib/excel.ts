@@ -482,9 +482,9 @@ export async function exportWorkLog(projects: Project[]): Promise<{ projectCount
   });
   headerRow.height = 36;
 
-  for (const project of projects) {
+  projects.forEach((project, index) => {
     const row = sheet.addRow([
-      now,
+      index === 0 ? now : "",
       project.projectNo,
       project.detailProgress || "",
       STATUS_LABELS[project.status],
@@ -495,11 +495,23 @@ export async function exportWorkLog(projects: Project[]): Promise<{ projectCount
       cell.alignment = { vertical: "center", wrapText: true };
       cell.border = blackBorder;
     });
-    row.getCell(1).numFmt = "yyyy/m/d";
+    if (index === 0) {
+      row.getCell(1).numFmt = "yyyy/m/d";
+    }
     row.getCell(1).alignment = { horizontal: "center", vertical: "center" };
     row.getCell(2).alignment = { horizontal: "center", vertical: "center" };
     row.getCell(4).alignment = { horizontal: "center", vertical: "center" };
     row.height = 36;
+  });
+
+  if (projects.length > 1) {
+    const firstDataRow = 4;
+    const lastDataRow = 3 + projects.length;
+    sheet.mergeCells(firstDataRow, 1, lastDataRow, 1);
+    const dateCell = sheet.getCell(firstDataRow, 1);
+    dateCell.numFmt = "yyyy/m/d";
+    dateCell.alignment = { horizontal: "center", vertical: "center" };
+    dateCell.border = blackBorder;
   }
 
   sheet.columns = [
