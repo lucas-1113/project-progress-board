@@ -326,7 +326,7 @@ export async function exportTrackingSheet(
   ]);
   summaryHeader.eachCell((cell) => {
     cell.font = { bold: true };
-    cell.alignment = { horizontal: "center", vertical: "center", wrapText: true };
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
   });
 
   for (const project of projects) {
@@ -338,7 +338,7 @@ export async function exportTrackingSheet(
     ]);
     row.eachCell((cell, colNumber) => {
       if (colNumber >= 7 && colNumber <= 6 + stageDefs.length) {
-        cell.alignment = { horizontal: "center", vertical: "center" };
+        cell.alignment = { horizontal: "center", vertical: "middle" };
       }
     });
   }
@@ -379,7 +379,7 @@ export async function exportTrackingSheet(
   ]);
   detailHeader.eachCell((cell) => {
     cell.font = { bold: true };
-    cell.alignment = { horizontal: "center", vertical: "center", wrapText: true };
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
   });
   detailHeader.height = 36;
 
@@ -477,42 +477,40 @@ export async function exportWorkLog(projects: Project[]): Promise<{ projectCount
   const headerRow = sheet.addRow(headers);
   headerRow.eachCell((cell) => {
     cell.font = { bold: true };
-    cell.alignment = { horizontal: "center", vertical: "center", wrapText: true };
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     cell.border = blackBorder;
   });
   headerRow.height = 36;
 
   projects.forEach((project, index) => {
     const row = sheet.addRow([
-      index === 0 ? now : "",
+      index === 0 ? now : null,
       project.projectNo,
       project.detailProgress || "",
       STATUS_LABELS[project.status],
       "",
       "",
     ]);
-    row.eachCell((cell) => {
-      cell.alignment = { vertical: "center", wrapText: true };
+    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      if (colNumber === 1) return;
+      cell.alignment = { vertical: "middle", wrapText: true };
       cell.border = blackBorder;
     });
-    if (index === 0) {
-      row.getCell(1).numFmt = "yyyy/m/d";
-    }
-    row.getCell(1).alignment = { horizontal: "center", vertical: "center" };
-    row.getCell(2).alignment = { horizontal: "center", vertical: "center" };
-    row.getCell(4).alignment = { horizontal: "center", vertical: "center" };
+    row.getCell(2).alignment = { horizontal: "center", vertical: "middle" };
+    row.getCell(4).alignment = { horizontal: "center", vertical: "middle" };
     row.height = 36;
   });
 
-  if (projects.length > 1) {
-    const firstDataRow = 4;
-    const lastDataRow = 3 + projects.length;
+  const firstDataRow = 4;
+  const lastDataRow = 3 + projects.length;
+  if (lastDataRow > firstDataRow) {
     sheet.mergeCells(firstDataRow, 1, lastDataRow, 1);
-    const dateCell = sheet.getCell(firstDataRow, 1);
-    dateCell.numFmt = "yyyy/m/d";
-    dateCell.alignment = { horizontal: "center", vertical: "center" };
-    dateCell.border = blackBorder;
   }
+  const dateCell = sheet.getCell(firstDataRow, 1);
+  dateCell.numFmt = "yyyy/m/d";
+  dateCell.value = now;
+  dateCell.alignment = { horizontal: "center", vertical: "middle" };
+  dateCell.border = blackBorder;
 
   sheet.columns = [
     { width: 14 },
